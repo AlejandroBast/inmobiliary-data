@@ -2,10 +2,18 @@ import { chromium } from 'playwright';
 import { config } from '../config.js';
 
 export async function launchBrowser() {
-  return chromium.launch({
+  const launchOptions = {
     headless: config.bot.headless,
     args: ['--disable-dev-shm-usage']
-  });
+  };
+
+  if (config.bot.browserExecutable) {
+    launchOptions.executablePath = config.bot.browserExecutable;
+  } else if (config.bot.browserChannel) {
+    launchOptions.channel = config.bot.browserChannel;
+  }
+
+  return chromium.launch(launchOptions);
 }
 
 export async function newContext(browser, sourceKey) {
@@ -20,7 +28,19 @@ export async function newContext(browser, sourceKey) {
     contextOptions.storageState = config.facebookStorageState;
   }
 
-  return browser.newContext(contextOptions);
+  const context = await browser.newContext(contextOptions);
+
+  if (config.bot.blockHeavyResources && !config.bot.downloadImages) {
+    await context.route('**/*', (route) => {
+      const type = route.request().resourceType();
+      if (['image', 'media', 'font'].includes(type)) {
+        return route.abort();
+      }
+      return route.continue();
+    });
+  }
+
+  return context;
 }
 
 export async function politeDelay(ms = config.bot.delayMs) {

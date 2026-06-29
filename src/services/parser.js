@@ -264,12 +264,13 @@ function titleCase(value) {
 }
 
 export function extractExternalCode(url = '', text = '') {
+  const numericTail = url.match(/(?:-|\/)([0-9]{5,})(?:[/?#]|$)/);
+  if (numericTail) return numericTail[1];
+
   const fse = text.match(/\bFSE\s*([0-9-]+)/i);
   if (fse) return `FSE-${fse[1]}`;
   const code = text.match(/\b(?:codigo|c[oó]digo|cod)\s*[:#]?\s*([A-Z0-9-]{4,})/i);
-  if (code) return code[1];
-  const numericTail = url.match(/(?:-|\/)([0-9]{5,})(?:[/?#]|$)/);
-  if (numericTail) return numericTail[1];
+  if (code && /[0-9]/.test(code[1])) return code[1];
   return sha256(url).slice(0, 24);
 }
 

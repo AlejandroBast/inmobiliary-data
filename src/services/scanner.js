@@ -1,6 +1,6 @@
 import { launchBrowser, newContext } from './browser.js';
 import { createAllScrapers, createScraper } from '../sources/index.js';
-import { createScan, failScan, findSourceByName, finishScan, insertScanResult } from '../db.js';
+import { createScan, failScan, findKnownUrls, findSourceByName, finishScan, insertScanResult } from '../db.js';
 import { ingestListing, saveListingAssets } from './ingestor.js';
 import { downloadAndOptimizeImages, saveEvidence } from './storage.js';
 import { logger } from '../logger.js';
@@ -33,7 +33,9 @@ async function scanOneSource(browser, scraper, options) {
     source: scraper.definition.key,
     urls: scraper.definition.urls,
     maxPages: options.maxPages || config.bot.maxPages,
-    maxListingsPerSource: options.maxListingsPerSource || config.bot.maxListingsPerSource
+    maxListingsPerSource: options.maxListingsPerSource || config.bot.maxListingsPerSource,
+    scanConcurrency: config.bot.scanConcurrency,
+    skipKnownUrls: config.bot.skipKnownUrls
   });
 
   const summary = {
@@ -42,6 +44,7 @@ async function scanOneSource(browser, scraper, options) {
     totalEncontradas: 0,
     totalGuardadas: 0,
     totalDescartadas: 0,
+    totalOmitidas: 0,
     totalErrores: 0,
     mensajeError: null
   };
@@ -52,7 +55,21 @@ async function scanOneSource(browser, scraper, options) {
     summary.totalEncontradas = links.length;
     logger.info({ source: scraper.definition.key, total: links.length }, 'Links detectados');
 
-    for (const item of links) {
+    const knownUrls = config.bot.skipKnownUrls
+      ? await findKnownUrls(source.id_fuente, links.map((item) => item.href))
+      : new Set();
+    const linksToProcess = links.filter((item) => !knownUrls.has(item.href));
+    summary.totalOmitidas = links.length - linksToProcess.length;
+
+    if (summary.totalOmitidas > 0) {
+      logger.info({
+        source: scraper.definition.key,
+        omitidas: summary.totalOmitidas,
+        procesar: linksToProcess.length
+      }, 'URLs ya conocidas omitidas');
+    }
+
+    await mapLimit(linksToProcess, config.bot.scanConcurrency, async (item) => {
       try {
         const listing = await scraper.extract(context, item);
         const saved = await ingestListing(listing);
@@ -67,7 +84,7 @@ async function scanOneSource(browser, scraper, options) {
             reason: saved.reason,
             extracted: previewListing(listing)
           });
-          continue;
+          return;
         }
 
         const evidences = await saveEvidence(saved.publicationId, listing);
@@ -100,7 +117,7 @@ async function scanOneSource(browser, scraper, options) {
           extracted: null
         });
       }
-    }
+    });
 
     await finishScan(scanId, summary);
     return summary;
@@ -112,6 +129,19 @@ async function scanOneSource(browser, scraper, options) {
   } finally {
     await context.close();
   }
+}
+
+async function mapLimit(items, limit, work) {
+  const safeLimit = Math.max(1, Number.isFinite(limit) ? limit : 1);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(safeLimit, items.length) }, async () => {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      await work(items[currentIndex], currentIndex);
+    }
+  });
+  await Promise.all(workers);
 }
 
 function previewListing(listing) {

@@ -58,6 +58,31 @@ export async function findSourceByName(name, connection = getPool()) {
   return rows[0] || null;
 }
 
+export async function findKnownUrls(sourceId, urls = [], connection = getPool()) {
+  const cleanUrls = [...new Set((urls || []).filter(Boolean))];
+  if (!cleanUrls.length) return new Set();
+
+  const known = new Set();
+  const chunkSize = 100;
+  for (let i = 0; i < cleanUrls.length; i += chunkSize) {
+    const chunk = cleanUrls.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    const [rows] = await connection.execute(
+      `SELECT enlace_publicacion AS url
+       FROM publicaciones
+       WHERE id_fuente = ? AND enlace_publicacion IN (${placeholders})
+       UNION
+       SELECT url
+       FROM enlaces_relacionados
+       WHERE id_fuente = ? AND url IN (${placeholders})`,
+      [sourceId, ...chunk, sourceId, ...chunk]
+    );
+    for (const row of rows) known.add(row.url);
+  }
+
+  return known;
+}
+
 export async function createScan(sourceId, params) {
   const [result] = await getPool().execute(
     `INSERT INTO escaneos (id_fuente, estado, parametros, iniciado_en)

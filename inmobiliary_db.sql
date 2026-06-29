@@ -229,19 +229,17 @@ CREATE TABLE IF NOT EXISTS precios_publicacion (
     ) STORED,
   confianza_precio DECIMAL(5,2) NOT NULL DEFAULT 0.00,
   vigente BOOLEAN NOT NULL DEFAULT TRUE,
-  id_publicacion_vigente BIGINT
-    GENERATED ALWAYS AS (CASE WHEN vigente = TRUE THEN id_publicacion ELSE NULL END) STORED,
   observacion VARCHAR(500) NULL,
   fecha_captura DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
   CONSTRAINT fk_precios_publicacion
     FOREIGN KEY (id_publicacion) REFERENCES publicaciones (id_publicacion)
     ON UPDATE CASCADE ON DELETE CASCADE,
-  CONSTRAINT uk_precio_vigente_por_publicacion UNIQUE (id_publicacion_vigente),
   CONSTRAINT chk_precios_precio CHECK (precio_normalizado IS NULL OR precio_normalizado >= 0),
   CONSTRAINT chk_precios_m2 CHECK (m2_usado_calculo IS NULL OR m2_usado_calculo >= 0),
   CONSTRAINT chk_precios_confianza CHECK (confianza_precio BETWEEN 0 AND 100),
   INDEX idx_precios_publicacion (id_publicacion),
+  INDEX idx_precios_publicacion_vigente (id_publicacion, vigente),
   INDEX idx_precios_precio (precio_normalizado),
   INDEX idx_precios_valor_m2 (valor_m2_calculado),
   INDEX idx_precios_moneda (moneda),
@@ -365,7 +363,6 @@ CREATE TABLE IF NOT EXISTS duplicados_sugeridos (
     FOREIGN KEY (id_inmueble_posible_duplicado) REFERENCES inmuebles (id_inmueble)
     ON UPDATE CASCADE ON DELETE CASCADE,
   CONSTRAINT uk_duplicados_par UNIQUE (id_inmueble_principal, id_inmueble_posible_duplicado),
-  CONSTRAINT chk_duplicados_no_mismo CHECK (id_inmueble_principal <> id_inmueble_posible_duplicado),
   CONSTRAINT chk_duplicados_puntaje CHECK (puntaje_similitud BETWEEN 0 AND 100),
   INDEX idx_duplicados_principal (id_inmueble_principal),
   INDEX idx_duplicados_posible (id_inmueble_posible_duplicado),

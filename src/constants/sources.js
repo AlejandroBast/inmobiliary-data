@@ -11,7 +11,9 @@ const sourceDefinitions = {
       'https://www.fincaraiz.com.co/venta/casas/pasto/narino'
     ],
     allowedHosts: ['www.fincaraiz.com.co', 'fincaraiz.com.co'],
-    linkHints: ['venta', 'pasto']
+    linkHints: ['venta', 'pasto'],
+    requireRegionalUrl: true,
+    regionHints: ['pasto', 'narino', 'nariño']
   },
   metrocuadrado: {
     key: 'metrocuadrado',
@@ -23,7 +25,9 @@ const sourceDefinitions = {
       'https://www.metrocuadrado.com/casas/venta/pasto/'
     ],
     allowedHosts: ['www.metrocuadrado.com', 'metrocuadrado.com'],
-    linkHints: ['venta', 'pasto']
+    linkHints: ['venta', 'pasto'],
+    requireRegionalUrl: true,
+    regionHints: ['pasto', 'narino', 'nariño']
   },
   ciencuadras: {
     key: 'ciencuadras',
@@ -35,7 +39,9 @@ const sourceDefinitions = {
       'https://www.ciencuadras.com/venta/pasto/casa-apartamento'
     ],
     allowedHosts: ['www.ciencuadras.com', 'ciencuadras.com'],
-    linkHints: ['venta', 'pasto']
+    linkHints: ['venta', 'pasto'],
+    requireRegionalUrl: true,
+    regionHints: ['pasto', 'narino', 'nariño']
   },
   amorel: {
     key: 'amorel',

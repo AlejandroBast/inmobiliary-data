@@ -1,8 +1,9 @@
 import express from 'express';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
-import { getPool, closePool, markInterruptedScans } from './db.js';
+import { getPool, closePool, markInterruptedScans, withTransaction } from './db.js';
 import { scanSources } from './services/scanner.js';
 import { scannerDaemon } from './services/daemon.js';
 import { logger } from './logger.js';
@@ -109,7 +110,7 @@ app.get('/api/publicaciones/:id', async (req, res) => {
     const id = Number.parseInt(req.params.id, 10);
     const [[publicationRows], [imageRows], [noteRows], [evidenceRows]] = await Promise.all([
       getPool().execute(
-        `SELECT p.*, i.*, f.nombre AS fuente_origen, pp.precio_normalizado, pp.valor_m2_calculado,
+        `SELECT p.*, p.id_fuente AS publicacion_id_fuente, i.*, f.nombre AS fuente_origen, pp.precio_normalizado, pp.valor_m2_calculado,
                 c.m2, c.m2_construidos, c.habitaciones, c.banos, c.parqueadero, c.parqueadero_detalle,
                 c.valor_administracion, c.descripcion_general
          FROM publicaciones p
@@ -134,6 +135,39 @@ app.get('/api/publicaciones/:id', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: formatDbError(error) });
+  }
+});
+
+app.post('/api/publicaciones', async (req, res) => {
+  try {
+    const payload = normalizePublicationPayload(req.body);
+    const id = await withTransaction(async (connection) => createPublication(connection, payload));
+    res.status(201).json({ ok: true, id_publicacion: id });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: formatDbError(error) });
+  }
+});
+
+app.put('/api/publicaciones/:id', async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'ID invalido.' });
+    const payload = normalizePublicationPayload(req.body);
+    await withTransaction(async (connection) => updatePublication(connection, id, payload));
+    res.json({ ok: true, id_publicacion: id });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: formatDbError(error) });
+  }
+});
+
+app.delete('/api/publicaciones/:id', async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) return res.status(400).json({ error: 'ID invalido.' });
+    await withTransaction(async (connection) => deletePublication(connection, id));
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: formatDbError(error) });
   }
 });
 
@@ -230,6 +264,210 @@ async function shutdown() {
   server.close();
   await closePool();
   process.exit(0);
+}
+
+function normalizePublicationPayload(body = {}) {
+  const payload = {
+    idFuente: numberOrNull(body.id_fuente),
+    titulo: cleanString(body.titulo, 350),
+    url: cleanString(body.enlace_publicacion, 1200),
+    codigo: cleanString(body.codigo_publicacion_fuente, 180),
+    estado: cleanEnum(body.estado_publicacion, ['activa', 'inactiva', 'pausada', 'vendida', 'descartada', 'error', 'desconocida'], 'activa'),
+    tipo: cleanEnum(body.tipo_inmueble, ['apartamento', 'casa', 'lote', 'local', 'oficina', 'bodega', 'finca', 'otro'], 'otro'),
+    barrio: cleanString(body.barrio_texto, 180),
+    descripcion: cleanString(body.descripcion, 6000),
+    precio: numberOrNull(body.precio_normalizado),
+    m2: numberOrNull(body.m2),
+    habitaciones: intOrNull(body.habitaciones),
+    banos: intOrNull(body.banos),
+    administracion: numberOrNull(body.valor_administracion)
+  };
+
+  if (!payload.idFuente) throw new Error('Selecciona una fuente.');
+  if (!payload.url) throw new Error('El link de la publicacion es obligatorio.');
+  payload.codigo = payload.codigo || extractCodeFromUrl(payload.url) || `manual-${Date.now()}`;
+  payload.titulo = payload.titulo || 'Publicacion manual';
+  payload.descripcion = payload.descripcion || payload.titulo;
+  return payload;
+}
+
+async function createPublication(connection, payload) {
+  await assertSourceExists(connection, payload.idFuente);
+  const barrioId = payload.barrio ? await upsertBarrio(connection, payload.barrio) : null;
+  const [inmuebleResult] = await connection.execute(
+    `INSERT INTO inmuebles
+      (tipo_inmueble, tipo_oferta, concepto, ciudad, departamento, id_barrio,
+       barrio_texto, localizacion_texto, calificacion_confiabilidad, estado_registro, activo)
+     VALUES (?, 'venta', ?, 'Pasto', 'Narino', ?, ?, ?, 85, 'validado', TRUE)`,
+    [
+      payload.tipo,
+      payload.titulo,
+      barrioId,
+      payload.barrio,
+      payload.barrio ? `${payload.barrio}, Pasto, Narino` : 'Pasto, Narino'
+    ]
+  );
+  const inmuebleId = inmuebleResult.insertId;
+  await upsertCaracteristicas(connection, inmuebleId, payload);
+
+  const [publicationResult] = await connection.execute(
+    `INSERT INTO publicaciones
+      (id_inmueble, id_fuente, codigo_publicacion_fuente, titulo, enlace_publicacion,
+       fecha_captura, fecha_ultima_revision, descripcion_original, estado_publicacion, datos_crudos, hash_contenido)
+     VALUES (?, ?, ?, ?, ?, NOW(), NOW(), ?, ?, ?, ?)`,
+    [
+      inmuebleId,
+      payload.idFuente,
+      payload.codigo,
+      payload.titulo,
+      payload.url,
+      payload.descripcion,
+      payload.estado,
+      JSON.stringify({ origen: 'crud_manual' }),
+      hashPublication(payload.idFuente, payload.codigo, payload.url)
+    ]
+  );
+  await replaceCurrentPrice(connection, publicationResult.insertId, payload);
+  return publicationResult.insertId;
+}
+
+async function updatePublication(connection, publicationId, payload) {
+  await assertSourceExists(connection, payload.idFuente);
+  const [rows] = await connection.execute(
+    'SELECT id_inmueble FROM publicaciones WHERE id_publicacion = ? LIMIT 1',
+    [publicationId]
+  );
+  if (!rows.length) throw new Error('Publicacion no encontrada.');
+
+  const inmuebleId = rows[0].id_inmueble;
+  const barrioId = payload.barrio ? await upsertBarrio(connection, payload.barrio) : null;
+  await connection.execute(
+    `UPDATE inmuebles
+     SET tipo_inmueble = ?, concepto = ?, id_barrio = ?, barrio_texto = ?,
+         localizacion_texto = ?, estado_registro = 'validado', activo = TRUE
+     WHERE id_inmueble = ?`,
+    [
+      payload.tipo,
+      payload.titulo,
+      barrioId,
+      payload.barrio,
+      payload.barrio ? `${payload.barrio}, Pasto, Narino` : 'Pasto, Narino',
+      inmuebleId
+    ]
+  );
+  await upsertCaracteristicas(connection, inmuebleId, payload);
+  await connection.execute(
+    `UPDATE publicaciones
+     SET id_fuente = ?, codigo_publicacion_fuente = ?, titulo = ?, enlace_publicacion = ?,
+         fecha_ultima_revision = NOW(), descripcion_original = ?, estado_publicacion = ?,
+         hash_contenido = ?
+     WHERE id_publicacion = ?`,
+    [
+      payload.idFuente,
+      payload.codigo,
+      payload.titulo,
+      payload.url,
+      payload.descripcion,
+      payload.estado,
+      hashPublication(payload.idFuente, payload.codigo, payload.url),
+      publicationId
+    ]
+  );
+  await replaceCurrentPrice(connection, publicationId, payload);
+}
+
+async function deletePublication(connection, publicationId) {
+  const [rows] = await connection.execute(
+    'SELECT id_inmueble FROM publicaciones WHERE id_publicacion = ? LIMIT 1',
+    [publicationId]
+  );
+  if (!rows.length) throw new Error('Publicacion no encontrada.');
+  const inmuebleId = rows[0].id_inmueble;
+  await connection.execute('DELETE FROM publicaciones WHERE id_publicacion = ?', [publicationId]);
+  const [[countRow]] = await connection.execute(
+    'SELECT COUNT(*) AS total FROM publicaciones WHERE id_inmueble = ?',
+    [inmuebleId]
+  );
+  if (Number(countRow.total) === 0) {
+    await connection.execute('DELETE FROM inmuebles WHERE id_inmueble = ?', [inmuebleId]);
+  }
+}
+
+async function assertSourceExists(connection, sourceId) {
+  const [rows] = await connection.execute('SELECT id_fuente FROM fuentes WHERE id_fuente = ? LIMIT 1', [sourceId]);
+  if (!rows.length) throw new Error('La fuente seleccionada no existe.');
+}
+
+async function upsertBarrio(connection, name) {
+  await connection.execute(
+    `INSERT INTO barrios (nombre, ciudad, departamento, activo)
+     VALUES (?, 'Pasto', 'Narino', TRUE)
+     ON DUPLICATE KEY UPDATE activo = TRUE`,
+    [name]
+  );
+  const [rows] = await connection.execute(
+    `SELECT id_barrio FROM barrios
+     WHERE nombre = ? AND ciudad = 'Pasto' AND departamento = 'Narino'
+     LIMIT 1`,
+    [name]
+  );
+  return rows[0]?.id_barrio || null;
+}
+
+async function upsertCaracteristicas(connection, inmuebleId, payload) {
+  await connection.execute(
+    `INSERT INTO caracteristicas_inmueble
+      (id_inmueble, m2, habitaciones, banos, valor_administracion, descripcion_general)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       m2 = VALUES(m2),
+       habitaciones = VALUES(habitaciones),
+       banos = VALUES(banos),
+       valor_administracion = VALUES(valor_administracion),
+       descripcion_general = VALUES(descripcion_general)`,
+    [inmuebleId, payload.m2, payload.habitaciones, payload.banos, payload.administracion, payload.descripcion]
+  );
+}
+
+async function replaceCurrentPrice(connection, publicationId, payload) {
+  await connection.execute('UPDATE precios_publicacion SET vigente = FALSE WHERE id_publicacion = ?', [publicationId]);
+  if (payload.precio === null) return;
+  await connection.execute(
+    `INSERT INTO precios_publicacion
+      (id_publicacion, precio_original, precio_normalizado, moneda, m2_usado_calculo, confianza_precio, vigente, fecha_captura)
+     VALUES (?, ?, ?, 'COP', ?, 100, TRUE, NOW())`,
+    [publicationId, String(payload.precio), payload.precio, payload.m2]
+  );
+}
+
+function cleanString(value, maxLength) {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, maxLength) : null;
+}
+
+function cleanEnum(value, allowed, fallback) {
+  return allowed.includes(value) ? value : fallback;
+}
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+}
+
+function intOrNull(value) {
+  const number = numberOrNull(value);
+  return number === null ? null : Math.trunc(number);
+}
+
+function extractCodeFromUrl(url) {
+  const match = String(url).match(/(?:-|\/)([0-9]{5,})(?:[/?#]|$)/);
+  return match?.[1] || null;
+}
+
+function hashPublication(sourceId, code, url) {
+  return crypto.createHash('sha256').update(`${sourceId}|${code}|${url}`).digest('hex');
 }
 
 function formatDbError(error) {

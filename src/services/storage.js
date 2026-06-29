@@ -49,15 +49,16 @@ export async function downloadAndOptimizeImages(publicationId, images) {
   const imageDir = path.join(config.bot.storageDir, 'imagenes', `publicacion_${publicationId}`);
   await ensureDir(imageDir);
   const saved = [];
+  const selectedImages = images.slice(0, Math.max(0, config.bot.maxImagesPerListing));
 
-  for (const [index, image] of images.entries()) {
+  await mapLimit(selectedImages, config.bot.imageDownloadConcurrency, async (image, index) => {
     try {
       const response = await fetch(image.url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome Safari'
         }
       });
-      if (!response.ok) continue;
+      if (!response.ok) return;
       const input = Buffer.from(await response.arrayBuffer());
       const originalHash = sha256Buffer(input);
       const fileName = `publicacion_${String(publicationId).padStart(6, '0')}_imagen_${String(index + 1).padStart(2, '0')}.webp`;
@@ -87,7 +88,20 @@ export async function downloadAndOptimizeImages(publicationId, images) {
     } catch (error) {
       logger.warn({ image: image.url, error: error.message }, 'No se pudo descargar/optimizar imagen');
     }
-  }
+  });
 
   return saved;
+}
+
+async function mapLimit(items, limit, work) {
+  const safeLimit = Math.max(1, Number.isFinite(limit) ? limit : 1);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(safeLimit, items.length) }, async () => {
+    while (index < items.length) {
+      const currentIndex = index;
+      index += 1;
+      await work(items[currentIndex], currentIndex);
+    }
+  });
+  await Promise.all(workers);
 }

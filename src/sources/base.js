@@ -109,6 +109,13 @@ export class BaseSourceScraper {
     if (!this.definition.allowedHosts.includes(parsed.host)) return false;
     const combined = normalizeText(`${href} ${text}`);
     if (shouldDiscardByText(combined)) return false;
+    if (this.definition.requireRegionalUrl) {
+      const normalizedHref = normalizeText(href);
+      const regionHints = this.definition.regionHints || [];
+      if (!regionHints.some((hint) => normalizedHref.includes(normalizeText(hint)))) {
+        return false;
+      }
+    }
     return this.definition.linkHints.some((hint) => combined.includes(normalizeText(hint)));
   }
 

@@ -24,7 +24,7 @@ function csvEnv(name, fallback) {
 
 export const config = {
   projectRoot,
-  schemaPath: path.resolve(projectRoot, '..', 'inmobiliary_db.sql'),
+  schemaPath: path.resolve(projectRoot, 'inmobiliary_db.sql'),
   db: {
     host: process.env.DB_HOST || '127.0.0.1',
     port: intEnv('DB_PORT', 3306),
@@ -38,8 +38,13 @@ export const config = {
   },
   bot: {
     headless: boolEnv('BOT_HEADLESS', true),
+    browserExecutable: process.env.BOT_BROWSER_EXECUTABLE || '',
+    browserChannel: process.env.BOT_BROWSER_CHANNEL || '',
     maxPages: intEnv('BOT_MAX_PAGES', 3),
     maxListingsPerSource: intEnv('BOT_MAX_LISTINGS_PER_SOURCE', 30),
+    scanConcurrency: intEnv('BOT_SCAN_CONCURRENCY', 3),
+    skipKnownUrls: boolEnv('BOT_SKIP_KNOWN_URLS', true),
+    blockHeavyResources: boolEnv('BOT_BLOCK_HEAVY_RESOURCES', true),
     autoScan: boolEnv('BOT_AUTO_SCAN', false),
     scanOnStart: boolEnv('BOT_SCAN_ON_START', true),
     scanIntervalMinutes: intEnv('BOT_SCAN_INTERVAL_MINUTES', 30),
@@ -48,6 +53,8 @@ export const config = {
     department: process.env.BOT_DEPARTMENT || 'Narino',
     storageDir: path.resolve(projectRoot, process.env.BOT_STORAGE_DIR || './storage'),
     downloadImages: boolEnv('BOT_DOWNLOAD_IMAGES', true),
+    maxImagesPerListing: intEnv('BOT_MAX_IMAGES_PER_LISTING', 5),
+    imageDownloadConcurrency: intEnv('BOT_IMAGE_DOWNLOAD_CONCURRENCY', 3),
     saveEvidence: boolEnv('BOT_SAVE_EVIDENCE', true),
     saveScreenshots: boolEnv('BOT_SAVE_SCREENSHOTS', true)
   },

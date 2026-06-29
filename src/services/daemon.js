@@ -126,6 +126,10 @@ export class ScannerDaemon {
         maxListingsPerSource: config.bot.maxListingsPerSource,
         unlimitedPages: config.bot.maxPages <= 0,
         unlimitedListings: config.bot.maxListingsPerSource <= 0,
+        scanConcurrency: config.bot.scanConcurrency,
+        skipKnownUrls: config.bot.skipKnownUrls,
+        downloadImages: config.bot.downloadImages,
+        saveEvidence: config.bot.saveEvidence,
         city: config.bot.city,
         department: config.bot.department,
         onlySales: true
