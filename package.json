@@ -1,0 +1,25 @@
+{
+  "name": "inmobiliary-data-bot",
+  "version": "1.0.0",
+  "description": "Bot de recoleccion inmobiliaria para Inmobiliary-Data.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "db:init": "node src/cli.js db:init",
+    "scan": "node src/cli.js scan --all",
+    "scan:source": "node src/cli.js scan",
+    "server": "node src/server.js",
+    "check": "node scripts/check.js",
+    "playwright:install": "playwright install chromium"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mysql2": "^3.11.0",
+    "pino": "^9.3.2",
+    "pino-pretty": "^11.2.2",
+    "playwright": "^1.45.3",
+    "sharp": "^0.33.4"
+  }
+}
