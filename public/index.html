@@ -21,11 +21,41 @@
 
     <main>
       <section class="toolbar">
-        <input id="searchInput" type="search" placeholder="Buscar por descripcion, concepto o titulo">
-        <input id="barrioInput" type="search" placeholder="Barrio">
         <select id="fuenteInput">
           <option value="">Todas las fuentes</option>
         </select>
+        <div class="column-filter-menu" id="columnFilterMenu">
+          <select id="columnFilterSelect" class="filter-select" aria-label="Columna para filtrar">
+            <option value="">Filtrar</option>
+            <option value="id" data-type="numeric">ID</option>
+            <option value="fecha">Fecha</option>
+            <option value="precio" data-type="numeric">Precio</option>
+            <option value="barrio_col">Barrio/PH</option>
+            <option value="q">Descripcion</option>
+            <option value="tipo">Tipo</option>
+            <option value="m2" data-type="decimal">m2</option>
+            <option value="valor_m2" data-type="numeric">Valor m2</option>
+            <option value="habitaciones" data-type="numeric">Hab.</option>
+            <option value="banos" data-type="numeric">Banos</option>
+            <option value="notas" data-type="numeric">Notas</option>
+            <option value="link">Link</option>
+          </select>
+          <input id="columnFilterValue" type="search" placeholder="Valor" aria-label="Valor del filtro" hidden>
+          <div class="price-range-filter" id="priceRangeFilter" hidden>
+            <select id="priceRangePreset" aria-label="Rango de precio">
+              <option value="">Rango de precios</option>
+              <option value="0-50000000" data-min="0" data-max="50000000">Hasta 50 millones</option>
+              <option value="50000000-100000000" data-min="50000000" data-max="100000000">50 a 100 millones</option>
+              <option value="100000000-200000000" data-min="100000000" data-max="200000000">100 a 200 millones</option>
+              <option value="200000000-300000000" data-min="200000000" data-max="300000000">200 a 300 millones</option>
+              <option value="300000000-500000000" data-min="300000000" data-max="500000000">300 a 500 millones</option>
+              <option value="500000000-" data-min="500000000">Mas de 500 millones</option>
+            </select>
+            <input id="priceMinInput" type="search" inputmode="numeric" placeholder="Desde (millones)" aria-label="Precio desde">
+            <input id="priceMaxInput" type="search" inputmode="numeric" placeholder="Hasta (millones)" aria-label="Precio hasta">
+          </div>
+          <button id="clearColumnFilter" class="secondary" type="button" hidden>Limpiar</button>
+        </div>
         <button id="refreshButton">Actualizar</button>
         <button id="createButton" class="secondary">Nueva publicacion</button>
       </section>
@@ -42,7 +72,7 @@
       <section class="grid-wrap">
         <table>
           <thead>
-            <tr>
+            <tr class="label-row">
               <th>ID</th>
               <th>Fecha</th>
               <th>Fuente</th>
@@ -68,6 +98,6 @@
       </aside>
     </main>
 
-    <script src="/app.js"></script>
+    <script src="/app.js?v=20260701-price-range"></script>
   </body>
 </html>

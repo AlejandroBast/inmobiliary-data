@@ -1,8 +1,6 @@
 const rowsEl = document.querySelector('#rows');
 const statusEl = document.querySelector('#status');
 const fuenteInput = document.querySelector('#fuenteInput');
-const barrioInput = document.querySelector('#barrioInput');
-const searchInput = document.querySelector('#searchInput');
 const refreshButton = document.querySelector('#refreshButton');
 const createButton = document.querySelector('#createButton');
 const startBotButton = document.querySelector('#startBotButton');
@@ -13,8 +11,16 @@ const botMeta = document.querySelector('#botMeta');
 const detail = document.querySelector('#detail');
 const detailContent = document.querySelector('#detailContent');
 const closeDetail = document.querySelector('#closeDetail');
+const columnFilterSelect = document.querySelector('#columnFilterSelect');
+const columnFilterValue = document.querySelector('#columnFilterValue');
+const priceRangeFilter = document.querySelector('#priceRangeFilter');
+const priceRangePreset = document.querySelector('#priceRangePreset');
+const priceMinInput = document.querySelector('#priceMinInput');
+const priceMaxInput = document.querySelector('#priceMaxInput');
+const clearColumnFilter = document.querySelector('#clearColumnFilter');
 let currentImages = [];
 let currentImageIndex = 0;
+let filterTimer = null;
 
 const money = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -51,9 +57,14 @@ async function loadSources() {
 async function loadRows() {
   setStatus('Cargando publicaciones...');
   const params = new URLSearchParams();
+  params.set('limit', '500');
   if (fuenteInput.value) params.set('fuente', fuenteInput.value);
-  if (barrioInput.value.trim()) params.set('barrio', barrioInput.value.trim());
-  if (searchInput.value.trim()) params.set('q', searchInput.value.trim());
+  if (columnFilterSelect.value === 'precio') {
+    if (priceMinInput.value.trim()) params.set('precio_min', priceMinInput.value.trim());
+    if (priceMaxInput.value.trim()) params.set('precio_max', priceMaxInput.value.trim());
+  } else if (columnFilterSelect.value && columnFilterValue.value.trim()) {
+    params.set(columnFilterSelect.value, columnFilterValue.value.trim());
+  }
   const rows = await api(`/api/publicaciones?${params.toString()}`);
   rowsEl.innerHTML = '';
   for (const row of rows) {
@@ -76,7 +87,7 @@ async function loadRows() {
     tr.querySelector('button').addEventListener('click', () => openDetail(row.id));
     rowsEl.appendChild(tr);
   }
-  setStatus(`${rows.length} publicaciones mostradas.`);
+  setStatus(`${rows.length} publicaciones mostradas${rows.length >= 500 ? ' (maximo 500)' : ''}.`);
 }
 
 async function openDetail(id) {
@@ -390,6 +401,63 @@ createButton.addEventListener('click', () => openPublicationForm('create'));
 closeDetail.addEventListener('click', () => {
   closeDetailPanel();
 });
+
+columnFilterSelect.addEventListener('change', () => {
+  const option = columnFilterSelect.selectedOptions[0];
+  const isDateFilter = columnFilterSelect.value === 'fecha';
+  const isPriceFilter = columnFilterSelect.value === 'precio';
+  let inputMode = 'text';
+  if (option?.dataset.type === 'decimal') inputMode = 'decimal';
+  if (option?.dataset.type === 'numeric') inputMode = 'numeric';
+
+  columnFilterValue.hidden = !columnFilterSelect.value || isPriceFilter;
+  priceRangeFilter.hidden = !isPriceFilter;
+  clearColumnFilter.hidden = !columnFilterSelect.value;
+  columnFilterValue.value = '';
+  priceRangePreset.value = '';
+  priceMinInput.value = '';
+  priceMaxInput.value = '';
+  columnFilterValue.type = isDateFilter ? 'date' : 'search';
+  columnFilterValue.inputMode = inputMode;
+  columnFilterValue.placeholder = isDateFilter
+    ? ''
+    : columnFilterSelect.value
+      ? `Buscar en ${option.textContent}`
+      : 'Valor';
+  if (isPriceFilter) priceMinInput.focus();
+  else if (columnFilterSelect.value) columnFilterValue.focus();
+  scheduleRowsLoad();
+});
+
+columnFilterValue.addEventListener('input', scheduleRowsLoad);
+priceRangePreset.addEventListener('change', () => {
+  const option = priceRangePreset.selectedOptions[0];
+  priceMinInput.value = option?.dataset.min || '';
+  priceMaxInput.value = option?.dataset.max || '';
+  scheduleRowsLoad();
+});
+priceMinInput.addEventListener('input', scheduleRowsLoad);
+priceMaxInput.addEventListener('input', scheduleRowsLoad);
+
+clearColumnFilter.addEventListener('click', () => {
+  columnFilterSelect.value = '';
+  columnFilterValue.value = '';
+  priceRangePreset.value = '';
+  priceMinInput.value = '';
+  priceMaxInput.value = '';
+  columnFilterValue.type = 'search';
+  columnFilterValue.hidden = true;
+  priceRangeFilter.hidden = true;
+  clearColumnFilter.hidden = true;
+  scheduleRowsLoad();
+});
+
+function scheduleRowsLoad() {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    loadRows().catch((error) => setStatus(error.message));
+  }, 300);
+}
 
 startBotButton.addEventListener('click', async () => {
   setStatus('Iniciando bot automatico...');

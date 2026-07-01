@@ -74,6 +74,7 @@ p {
   background: #eef2f6;
   border-bottom: 1px solid var(--border);
   align-items: center;
+  position: relative;
 }
 
 input,
@@ -91,6 +92,30 @@ textarea {
 
 input[type="search"] {
   min-width: 260px;
+}
+
+.column-filter-menu {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.filter-select {
+  min-width: 130px;
+}
+
+.price-range-filter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.price-range-filter input[type="search"] {
+  min-width: 130px;
+}
+
+.price-range-filter select {
+  min-width: 190px;
 }
 
 button {
@@ -471,6 +496,25 @@ textarea {
   select,
   button {
     width: 100%;
+  }
+
+  .column-filter-menu,
+  .filter-select {
+    width: 100%;
+  }
+
+  .column-filter-menu {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .column-filter-menu input[type="search"] {
+    min-width: 0;
+  }
+
+  .price-range-filter {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .grid-wrap {

@@ -41,8 +41,22 @@ app.get('/api/publicaciones', async (req, res) => {
       filters.push('(p.titulo LIKE ? OR p.descripcion_original LIKE ? OR i.concepto LIKE ?)');
       params.push(`%${req.query.q}%`, `%${req.query.q}%`, `%${req.query.q}%`);
     }
+    addNumberFilter(filters, params, 'p.id_publicacion', req.query.id);
+    addLikeFilter(filters, params, "DATE_FORMAT(p.fecha_captura, '%Y-%m-%d %H:%i')", req.query.fecha);
+    addLikeFilter(filters, params, 'f.nombre', req.query.fuente_col);
+    addNumberFilter(filters, params, 'pp.precio_normalizado', req.query.precio);
+    addRangeFilter(filters, params, 'pp.precio_normalizado', req.query.precio_min, req.query.precio_max);
+    addLikeFilter(filters, params, 'COALESCE(ph.nombre, b.nombre, i.barrio_texto)', req.query.barrio_col);
+    addLikeFilter(filters, params, 'i.tipo_inmueble', req.query.tipo);
+    addNumberFilter(filters, params, 'c.m2', req.query.m2);
+    addNumberFilter(filters, params, 'pp.valor_m2_calculado', req.query.valor_m2);
+    addNumberFilter(filters, params, 'c.habitaciones', req.query.habitaciones);
+    addNumberFilter(filters, params, 'c.banos', req.query.banos);
+    addNumberFilter(filters, params, 'COALESCE(img.total_imagenes, 0)', req.query.imagenes);
+    addNumberFilter(filters, params, 'COALESCE(notes.total_anotaciones, 0)', req.query.notas);
+    addLikeFilter(filters, params, 'p.enlace_publicacion', req.query.link);
 
-    const limit = Math.min(Number.parseInt(req.query.limit || '100', 10), 500);
+    const limit = Math.min(Number.parseInt(req.query.limit || '500', 10), 500);
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const [rows] = await getPool().execute(
       `SELECT
@@ -443,6 +457,66 @@ async function replaceCurrentPrice(connection, publicationId, payload) {
 function cleanString(value, maxLength) {
   const text = String(value || '').trim();
   return text ? text.slice(0, maxLength) : null;
+}
+
+function addLikeFilter(filters, params, expression, value) {
+  const text = String(value || '').trim();
+  if (!text) return;
+  filters.push(`${expression} LIKE ?`);
+  params.push(`%${text}%`);
+}
+
+function addNumberFilter(filters, params, expression, value) {
+  const text = normalizeNumberInput(value);
+  if (text === '') return;
+  const number = Number(text);
+  if (!Number.isFinite(number)) return addLikeFilter(filters, params, `CAST(${expression} AS CHAR)`, value);
+  filters.push(`${expression} = ?`);
+  params.push(number);
+}
+
+function addRangeFilter(filters, params, expression, minValue, maxValue) {
+  const minText = normalizePriceInput(minValue);
+  const maxText = normalizePriceInput(maxValue);
+  const min = minText === '' ? null : Number(minText);
+  const max = maxText === '' ? null : Number(maxText);
+
+  if (Number.isFinite(min)) {
+    filters.push(`${expression} >= ?`);
+    params.push(min);
+  }
+  if (Number.isFinite(max)) {
+    filters.push(`${expression} <= ?`);
+    params.push(max);
+  }
+}
+
+function normalizePriceInput(value) {
+  const raw = String(value || '').toLowerCase();
+  const usesMillionSuffix = /(^|[\d\s.,])(m|mm|millon|millones)\b/.test(raw);
+  const text = normalizeNumberInput(raw.replace(/(m|mm|millon|millones)\b/g, ''));
+  if (text === '') return '';
+  const number = Number(text);
+  if (!Number.isFinite(number)) return text;
+  return String((usesMillionSuffix || (number > 0 && number < 1000)) ? number * 1_000_000 : number);
+}
+
+function normalizeNumberInput(value) {
+  let text = String(value || '').replace(/[$\s]/g, '').trim();
+  if (!text) return '';
+  if (text.includes(',') && text.includes('.')) {
+    return text.replace(/\./g, '').replace(',', '.');
+  }
+  if (text.includes(',')) {
+    return /^\d+,\d{1,2}$/.test(text) ? text.replace(',', '.') : text.replace(/,/g, '');
+  }
+  if ((text.match(/\./g) || []).length > 1) {
+    return text.replace(/\./g, '');
+  }
+  if (/^\d+\.\d{3}$/.test(text)) {
+    return text.replace('.', '');
+  }
+  return text;
 }
 
 function cleanEnum(value, allowed, fallback) {
