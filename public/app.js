@@ -13,6 +13,8 @@ const detailContent = document.querySelector('#detailContent');
 const closeDetail = document.querySelector('#closeDetail');
 const columnFilterSelect = document.querySelector('#columnFilterSelect');
 const columnFilterValue = document.querySelector('#columnFilterValue');
+const bathroomsFilterSelect = document.querySelector('#bathroomsFilterSelect');
+const notesFilterSelect = document.querySelector('#notesFilterSelect');
 const priceRangeFilter = document.querySelector('#priceRangeFilter');
 const priceRangePreset = document.querySelector('#priceRangePreset');
 const priceMinInput = document.querySelector('#priceMinInput');
@@ -62,6 +64,18 @@ async function loadRows() {
   if (columnFilterSelect.value === 'precio') {
     if (priceMinInput.value.trim()) params.set('precio_min', priceMinInput.value.trim());
     if (priceMaxInput.value.trim()) params.set('precio_max', priceMaxInput.value.trim());
+  } else if (columnFilterSelect.value === 'banos') {
+    if (bathroomsFilterSelect.value === 'exacto' && columnFilterValue.value.trim()) {
+      params.set('banos', columnFilterValue.value.trim());
+    } else if (bathroomsFilterSelect.value !== 'exacto') {
+      params.set('banos', bathroomsFilterSelect.value);
+    }
+  } else if (columnFilterSelect.value === 'notas') {
+    if (notesFilterSelect.value === 'exacto' && columnFilterValue.value.trim()) {
+      params.set('notas', columnFilterValue.value.trim());
+    } else if (notesFilterSelect.value !== 'exacto') {
+      params.set('notas', notesFilterSelect.value || 'con');
+    }
   } else if (columnFilterSelect.value && columnFilterValue.value.trim()) {
     params.set(columnFilterSelect.value, columnFilterValue.value.trim());
   }
@@ -79,7 +93,7 @@ async function loadRows() {
       <td class="num">${row.metros_cuadrados || ''}</td>
       <td class="num">${row.valor_m2 ? money.format(row.valor_m2) : ''}</td>
       <td class="num">${row.habitaciones || ''}</td>
-      <td class="num">${row.banos || ''}</td>
+      <td class="num">${row.banos ?? ''}</td>
       <td class="num">${row.total_imagenes}</td>
       <td class="num">${row.total_anotaciones}</td>
       <td>${row.link_1 ? `<a class="link" target="_blank" rel="noreferrer" href="${row.link_1}">Abrir</a>` : ''}</td>
@@ -406,14 +420,23 @@ columnFilterSelect.addEventListener('change', () => {
   const option = columnFilterSelect.selectedOptions[0];
   const isDateFilter = columnFilterSelect.value === 'fecha';
   const isPriceFilter = columnFilterSelect.value === 'precio';
+  const isBathroomsFilter = columnFilterSelect.value === 'banos';
+  const isNotesFilter = columnFilterSelect.value === 'notas';
   let inputMode = 'text';
   if (option?.dataset.type === 'decimal') inputMode = 'decimal';
   if (option?.dataset.type === 'numeric') inputMode = 'numeric';
 
-  columnFilterValue.hidden = !columnFilterSelect.value || isPriceFilter;
+  columnFilterValue.hidden = !columnFilterSelect.value
+    || isPriceFilter
+    || (isBathroomsFilter && bathroomsFilterSelect.value !== 'exacto')
+    || (isNotesFilter && notesFilterSelect.value !== 'exacto');
+  bathroomsFilterSelect.hidden = !isBathroomsFilter;
+  notesFilterSelect.hidden = !isNotesFilter;
   priceRangeFilter.hidden = !isPriceFilter;
   clearColumnFilter.hidden = !columnFilterSelect.value;
   columnFilterValue.value = '';
+  bathroomsFilterSelect.value = 'exacto';
+  notesFilterSelect.value = 'con';
   priceRangePreset.value = '';
   priceMinInput.value = '';
   priceMaxInput.value = '';
@@ -425,11 +448,31 @@ columnFilterSelect.addEventListener('change', () => {
       ? `Buscar en ${option.textContent}`
       : 'Valor';
   if (isPriceFilter) priceMinInput.focus();
+  else if (isBathroomsFilter) columnFilterValue.focus();
+  else if (isNotesFilter) notesFilterSelect.focus();
   else if (columnFilterSelect.value) columnFilterValue.focus();
   scheduleRowsLoad();
 });
 
 columnFilterValue.addEventListener('input', scheduleRowsLoad);
+bathroomsFilterSelect.addEventListener('change', () => {
+  const isExactCount = bathroomsFilterSelect.value === 'exacto';
+  columnFilterValue.hidden = !isExactCount;
+  columnFilterValue.value = '';
+  columnFilterValue.inputMode = 'numeric';
+  columnFilterValue.placeholder = 'Cantidad de banos';
+  if (isExactCount) columnFilterValue.focus();
+  scheduleRowsLoad();
+});
+notesFilterSelect.addEventListener('change', () => {
+  const isExactCount = notesFilterSelect.value === 'exacto';
+  columnFilterValue.hidden = !isExactCount;
+  columnFilterValue.value = '';
+  columnFilterValue.inputMode = 'numeric';
+  columnFilterValue.placeholder = 'Cantidad de notas';
+  if (isExactCount) columnFilterValue.focus();
+  scheduleRowsLoad();
+});
 priceRangePreset.addEventListener('change', () => {
   const option = priceRangePreset.selectedOptions[0];
   priceMinInput.value = option?.dataset.min || '';
@@ -442,11 +485,15 @@ priceMaxInput.addEventListener('input', scheduleRowsLoad);
 clearColumnFilter.addEventListener('click', () => {
   columnFilterSelect.value = '';
   columnFilterValue.value = '';
+  bathroomsFilterSelect.value = 'exacto';
+  notesFilterSelect.value = 'con';
   priceRangePreset.value = '';
   priceMinInput.value = '';
   priceMaxInput.value = '';
   columnFilterValue.type = 'search';
   columnFilterValue.hidden = true;
+  bathroomsFilterSelect.hidden = true;
+  notesFilterSelect.hidden = true;
   priceRangeFilter.hidden = true;
   clearColumnFilter.hidden = true;
   scheduleRowsLoad();

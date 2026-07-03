@@ -41,6 +41,16 @@
             <option value="link">Link</option>
           </select>
           <input id="columnFilterValue" type="search" placeholder="Valor" aria-label="Valor del filtro" hidden>
+          <select id="bathroomsFilterSelect" class="filter-select" aria-label="Filtro de banos" hidden>
+            <option value="exacto">Cantidad exacta</option>
+            <option value="sin_info">Sin informacion</option>
+            <option value="con_info">Con informacion</option>
+          </select>
+          <select id="notesFilterSelect" class="filter-select" aria-label="Filtro de notas" hidden>
+            <option value="con">Con notas</option>
+            <option value="sin">Sin notas</option>
+            <option value="exacto">Cantidad exacta</option>
+          </select>
           <div class="price-range-filter" id="priceRangeFilter" hidden>
             <select id="priceRangePreset" aria-label="Rango de precio">
               <option value="">Rango de precios</option>
@@ -98,6 +108,6 @@
       </aside>
     </main>
 
-    <script src="/app.js?v=20260701-price-range"></script>
+    <script src="/app.js?v=20260702-bathrooms-filter"></script>
   </body>
 </html>

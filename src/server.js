@@ -51,9 +51,9 @@ app.get('/api/publicaciones', async (req, res) => {
     addNumberFilter(filters, params, 'c.m2', req.query.m2);
     addNumberFilter(filters, params, 'pp.valor_m2_calculado', req.query.valor_m2);
     addNumberFilter(filters, params, 'c.habitaciones', req.query.habitaciones);
-    addNumberFilter(filters, params, 'c.banos', req.query.banos);
+    addNullableNumberFilter(filters, params, 'c.banos', req.query.banos);
     addNumberFilter(filters, params, 'COALESCE(img.total_imagenes, 0)', req.query.imagenes);
-    addNumberFilter(filters, params, 'COALESCE(notes.total_anotaciones, 0)', req.query.notas);
+    addNotesFilter(filters, params, 'COALESCE(notes.total_anotaciones, 0)', req.query.notas);
     addLikeFilter(filters, params, 'p.enlace_publicacion', req.query.link);
 
     const limit = Math.min(Number.parseInt(req.query.limit || '500', 10), 500);
@@ -473,6 +473,34 @@ function addNumberFilter(filters, params, expression, value) {
   if (!Number.isFinite(number)) return addLikeFilter(filters, params, `CAST(${expression} AS CHAR)`, value);
   filters.push(`${expression} = ?`);
   params.push(number);
+}
+
+function addNullableNumberFilter(filters, params, expression, value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return;
+  if (['sin_info', 'sin-informacion', 'sin informacion', 'sin', 'null', 'vacio'].includes(text)) {
+    filters.push(`${expression} IS NULL`);
+    return;
+  }
+  if (['con_info', 'con-informacion', 'con informacion', 'con'].includes(text)) {
+    filters.push(`${expression} IS NOT NULL`);
+    return;
+  }
+  addNumberFilter(filters, params, expression, value);
+}
+
+function addNotesFilter(filters, params, expression, value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (!text) return;
+  if (['con', 'si', 'sí', 'has', 'true', '1', 'con_notas'].includes(text)) {
+    filters.push(`${expression} > 0`);
+    return;
+  }
+  if (['sin', 'no', 'none', 'false', '0', 'sin_notas'].includes(text)) {
+    filters.push(`${expression} = 0`);
+    return;
+  }
+  addNumberFilter(filters, params, expression, value);
 }
 
 function addRangeFilter(filters, params, expression, minValue, maxValue) {
