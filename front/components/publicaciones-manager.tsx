@@ -33,6 +33,10 @@ import { Textarea } from "@/components/ui/textarea"
 type Row = Record<string, any> & { id: number }
 type ImageItem = { name: string; src: string }
 
+function barrioLabel(value?: string | null) {
+  return value?.trim() || "Sin barrio"
+}
+
 export function PublicacionesManager({
   publicaciones,
   fuentes,
@@ -234,7 +238,7 @@ export function PublicacionesManager({
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="text-sm">{p.barrio || p.direccion || "—"}</div>
+                      <div className="text-sm">{barrioLabel(p.barrio)}</div>
                       <div className="text-xs text-muted-foreground">{p.ciudad || "—"}</div>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
@@ -327,7 +331,7 @@ export function PublicacionesManager({
                 <Detail label="Antigüedad" value={detail.antiguedad || "—"} />
                 <Detail label="Ciudad" value={detail.ciudad || "—"} />
                 <Detail label="Comuna" value={detail.comuna || "—"} />
-                <Detail label="Barrio" value={detail.barrio || "—"} />
+                <Detail label="Barrio" value={barrioLabel(detail.barrio)} />
                 <Detail label="PH" value={detail.ph || "—"} />
               </div>
               {detail.direccion && (

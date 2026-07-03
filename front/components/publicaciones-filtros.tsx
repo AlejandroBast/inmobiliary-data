@@ -22,7 +22,10 @@ type FiltrosValue = {
   fecha: string
   habitaciones: string
   banios: string
-  ubicacion: string
+  parqueadero: string
+  barrio: string
+  precioMin: string
+  precioMax: string
 }
 
 const initialFilters: FiltrosValue = {
@@ -32,14 +35,21 @@ const initialFilters: FiltrosValue = {
   fecha: "",
   habitaciones: "",
   banios: "",
-  ubicacion: "",
+  parqueadero: "",
+  barrio: "",
+  precioMin: "",
+  precioMax: "",
 }
 
 export function PublicacionesFiltros({
   fuentes,
+  barrios,
+  hasSinBarrio,
   initialValues,
 }: {
   fuentes: Fuente[]
+  barrios: Array<{ value: string; label: string }>
+  hasSinBarrio: boolean
   initialValues: Partial<FiltrosValue>
 }) {
   const router = useRouter()
@@ -64,6 +74,8 @@ export function PublicacionesFiltros({
   function applyFilters() {
     const params = new URLSearchParams(searchParams.toString())
 
+    params.delete("ubicacion")
+
     Object.entries(values).forEach(([key, value]) => {
       const cleanValue = String(value || "").trim()
       if (cleanValue && cleanValue !== "all") {
@@ -85,7 +97,7 @@ export function PublicacionesFiltros({
     <Card className="border-dashed">
       <CardContent className="space-y-4 pt-6">
         <div>
-          <h2 className="text-lg font-semibold tracking-tight">Filtros de búsqueda</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Filtros de busqueda</h2>
           <p className="text-sm text-muted-foreground">
             Combina varios filtros y aplica solo los que necesites.
           </p>
@@ -114,16 +126,7 @@ export function PublicacionesFiltros({
               onChange={(event) => setField("tipoInmueble", event.target.value)}
             />
             <datalist id="tipos-inmueble">
-              {[
-                "Casa",
-                "Apartamento",
-                "Lote",
-                "Casa lote",
-                "Local",
-                "Oficina",
-                "Finca",
-                "Otro",
-              ].map((item) => (
+              {["Casa", "Apartamento", "Lote", "Casa lote", "Local", "Oficina", "Finca", "Otro"].map((item) => (
                 <option key={item} value={item} />
               ))}
             </datalist>
@@ -167,13 +170,13 @@ export function PublicacionesFiltros({
                 <SelectItem value="1">1</SelectItem>
                 <SelectItem value="2">2</SelectItem>
                 <SelectItem value="3">3</SelectItem>
-                <SelectItem value="4+">4 o más</SelectItem>
+                <SelectItem value="4+">4 o mas</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="filtro-banios">Baños</Label>
+            <Label htmlFor="filtro-banios">Banos</Label>
             <Select value={values.banios} onValueChange={(value) => setField("banios", value ?? "")}>
               <SelectTrigger id="filtro-banios">
                 <SelectValue placeholder="Cualquiera" />
@@ -183,18 +186,68 @@ export function PublicacionesFiltros({
                 <SelectItem value="1">1</SelectItem>
                 <SelectItem value="2">2</SelectItem>
                 <SelectItem value="3">3</SelectItem>
-                <SelectItem value="4+">4 o más</SelectItem>
+                <SelectItem value="4+">4 o mas</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          <div className="space-y-2 md:col-span-2 xl:col-span-2">
-            <Label htmlFor="filtro-ubicacion">Barrio, ubicación o PH</Label>
+          <div className="space-y-2">
+            <Label htmlFor="filtro-parqueadero">Parqueaderos</Label>
+            <Select value={values.parqueadero} onValueChange={(value) => setField("parqueadero", value ?? "")}>
+              <SelectTrigger id="filtro-parqueadero">
+                <SelectValue placeholder="Cualquiera" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Cualquiera</SelectItem>
+                <SelectItem value="0">Sin parqueadero</SelectItem>
+                <SelectItem value="1">1</SelectItem>
+                <SelectItem value="2">2</SelectItem>
+                <SelectItem value="3+">3 o mas</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="filtro-barrio">Barrio</Label>
+            <Select value={values.barrio} onValueChange={(value) => setField("barrio", value ?? "")}>
+              <SelectTrigger id="filtro-barrio">
+                <SelectValue placeholder="Todos los barrios" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los barrios</SelectItem>
+                {hasSinBarrio && <SelectItem value="__sin_barrio">Sin barrio</SelectItem>}
+                {barrios.map((barrio) => (
+                  <SelectItem key={barrio.value} value={barrio.value}>
+                    {barrio.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="filtro-precio-min">Precio minimo</Label>
             <Input
-              id="filtro-ubicacion"
-              placeholder="Centro, Palermo, Torres de San Felipe..."
-              value={values.ubicacion}
-              onChange={(event) => setField("ubicacion", event.target.value)}
+              id="filtro-precio-min"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="Ej. 50"
+              value={values.precioMin}
+              onChange={(event) => setField("precioMin", event.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="filtro-precio-max">Precio maximo</Label>
+            <Input
+              id="filtro-precio-max"
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="Ej. 300"
+              value={values.precioMax}
+              onChange={(event) => setField("precioMax", event.target.value)}
             />
           </div>
         </div>

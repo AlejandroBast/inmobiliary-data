@@ -1,4 +1,4 @@
-import { getFuentes, getPublicaciones, type PublicacionFilters } from "@/app/actions/publicaciones"
+import { getBarrios, getFuentes, getPublicaciones, type PublicacionFilters } from "@/app/actions/publicaciones"
 import { PublicacionesManager } from "@/components/publicaciones-manager"
 import { PublicacionesFiltros } from "@/components/publicaciones-filtros"
 import { Building2 } from "lucide-react"
@@ -31,10 +31,17 @@ export default async function Page({
     fecha: firstValue(params.fecha),
     habitaciones: firstValue(params.habitaciones),
     banios: firstValue(params.banios),
-    ubicacion: firstValue(params.ubicacion),
+    barrio: firstValue(params.barrio) || firstValue(params.ubicacion),
+    precioMin: firstValue(params.precioMin),
+    precioMax: firstValue(params.precioMax),
+    parqueadero: firstValue(params.parqueadero),
   }
 
-  const [publicaciones, fuentes] = await Promise.all([getPublicaciones(filtros), getFuentes()])
+  const [publicaciones, fuentes, barriosData] = await Promise.all([
+    getPublicaciones(filtros),
+    getFuentes(),
+    getBarrios(),
+  ])
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -55,6 +62,8 @@ export default async function Page({
       <div className="mb-6">
         <PublicacionesFiltros
           fuentes={fuentes}
+          barrios={barriosData.barrios}
+          hasSinBarrio={barriosData.hasSinBarrio}
           initialValues={{
             id: filtros.id ?? undefined,
             tipoInmueble: filtros.tipoInmueble ?? undefined,
@@ -62,7 +71,10 @@ export default async function Page({
             fecha: filtros.fecha ?? undefined,
             habitaciones: filtros.habitaciones ?? undefined,
             banios: filtros.banios ?? undefined,
-            ubicacion: filtros.ubicacion ?? undefined,
+            barrio: filtros.barrio ?? undefined,
+            precioMin: filtros.precioMin ?? undefined,
+            precioMax: filtros.precioMax ?? undefined,
+            parqueadero: filtros.parqueadero ?? undefined,
           }}
         />
       </div>

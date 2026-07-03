@@ -12,7 +12,11 @@ export type PublicacionFilters = {
   fecha?: string | null
   habitaciones?: string | null
   banios?: string | null
+  barrio?: string | null
   ubicacion?: string | null
+  precioMin?: string | null
+  precioMax?: string | null
+  parqueadero?: string | null
 }
 
 export type PublicacionInput = {
@@ -59,6 +63,73 @@ function parseNumericFilter(value?: string | null) {
 
   const parsed = Number.parseInt(cleaned, 10)
   return Number.isNaN(parsed) ? null : { type: "eq" as const, value: parsed }
+}
+
+function normalizeBarrio(value?: string | null) {
+  const normalized = value
+    ?.normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[.,;:_/\\-]+/g, " ")
+    .replace(/^(barrio|b|br|bo)\s+/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+
+  return normalized || null
+}
+
+function barrioSql() {
+  const withoutAccents = sql<string>`LOWER(
+    REPLACE(
+      REPLACE(
+        REPLACE(
+          REPLACE(
+            REPLACE(
+              REPLACE(
+                REPLACE(
+                  REPLACE(
+                    REPLACE(
+                      REPLACE(
+                        REPLACE(
+                          REPLACE(TRIM(${publicaciones.barrio}), 'Á', 'a'),
+                          'É', 'e'
+                        ),
+                        'Í', 'i'
+                      ),
+                      'Ó', 'o'
+                    ),
+                    'Ú', 'u'
+                  ),
+                  'Ü', 'u'
+                ),
+                'Ñ', 'n'
+              ),
+              'á', 'a'
+            ),
+            'é', 'e'
+          ),
+          'í', 'i'
+        ),
+        'ó', 'o'
+      ),
+      'ú', 'u'
+    )
+  )`
+
+  const withoutPunctuation = sql<string>`REGEXP_REPLACE(${withoutAccents}, ${"[.,;:_/\\\\-]+"}, ${" "})`
+  const withoutPrefix = sql<string>`REGEXP_REPLACE(${withoutPunctuation}, ${"^(barrio|b|br|bo)\\s+"}, ${""})`
+
+  return sql<string>`TRIM(REGEXP_REPLACE(${withoutPrefix}, ${"\\s+"}, ${" "}))`
+}
+
+function parseMoneyFilter(value?: string | null) {
+  const cleaned = cleanFilter(value)?.replace(/\D/g, "")
+  if (!cleaned) return null
+
+  const parsed = Number.parseInt(cleaned, 10)
+  if (Number.isNaN(parsed)) return null
+
+  return parsed > 0 && parsed < 100000 ? parsed * 1_000_000 : parsed
 }
 
 function isValidDate(value: string) {
@@ -113,16 +184,33 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     )
   }
 
-  const ubicacion = cleanFilter(filters.ubicacion)
-  if (ubicacion) {
-    const likePattern = `%${ubicacion}%`
-    conditions.push(sql`(
-      ${publicaciones.barrio} LIKE ${likePattern}
-      OR ${publicaciones.direccion} LIKE ${likePattern}
-      OR ${publicaciones.comuna} LIKE ${likePattern}
-      OR ${publicaciones.ph} LIKE ${likePattern}
-      OR ${publicaciones.ciudad} LIKE ${likePattern}
-    )`)
+  const parqueadero = parseNumericFilter(filters.parqueadero)
+  if (parqueadero) {
+    conditions.push(
+      parqueadero.type === "gte"
+        ? sql`${publicaciones.parqueadero} >= ${parqueadero.value}`
+        : eq(publicaciones.parqueadero, parqueadero.value),
+    )
+  }
+
+  const precioMin = parseMoneyFilter(filters.precioMin)
+  if (precioMin) {
+    conditions.push(sql`${publicaciones.precio} >= ${precioMin}`)
+  }
+
+  const precioMax = parseMoneyFilter(filters.precioMax)
+  if (precioMax) {
+    conditions.push(sql`${publicaciones.precio} <= ${precioMax}`)
+  }
+
+  const barrio = cleanFilter(filters.barrio) ?? cleanFilter(filters.ubicacion)
+  if (barrio === "__sin_barrio") {
+    conditions.push(sql`(${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = '')`)
+  } else {
+    const barrioNormalizado = normalizeBarrio(barrio)
+    if (barrioNormalizado) {
+      conditions.push(sql`${barrioSql()} = ${barrioNormalizado}`)
+    }
   }
 
   const query = db
@@ -168,6 +256,41 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
 
 export async function getFuentes() {
   return db.select().from(fuentesInmobiliarias).orderBy(fuentesInmobiliarias.nombre)
+}
+
+export async function getBarrios() {
+  const rows = await db
+    .select({
+      barrio: publicaciones.barrio,
+    })
+    .from(publicaciones)
+    .where(sql`${publicaciones.barrio} IS NOT NULL AND TRIM(${publicaciones.barrio}) <> ''`)
+    .groupBy(publicaciones.barrio)
+    .orderBy(publicaciones.barrio)
+
+  const options = new Map<string, string>()
+
+  for (const row of rows) {
+    const normalized = normalizeBarrio(row.barrio)
+    const label = row.barrio?.replace(/\s+/g, " ").trim()
+    if (normalized && label && !options.has(normalized)) {
+      options.set(normalized, label)
+    }
+  }
+
+  const [sinBarrio] = await db
+    .select({
+      total: sql<number>`COUNT(*)`,
+    })
+    .from(publicaciones)
+    .where(sql`${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = ''`)
+
+  return {
+    barrios: Array.from(options, ([value, label]) => ({ value, label })).sort((a, b) =>
+      a.label.localeCompare(b.label, "es"),
+    ),
+    hasSinBarrio: Number(sinBarrio?.total ?? 0) > 0,
+  }
 }
 
 export async function createFuente(input: { nombre: string; tipoFuente?: string | null; urlBase?: string | null }) {
