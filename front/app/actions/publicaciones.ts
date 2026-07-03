@@ -2,8 +2,18 @@
 
 import { db } from "@/lib/db"
 import { fuentesInmobiliarias, publicaciones } from "@/lib/db/schema"
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq, sql } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
+
+export type PublicacionFilters = {
+  id?: string | null
+  tipoInmueble?: string | null
+  fuenteId?: string | null
+  fecha?: string | null
+  habitaciones?: string | null
+  banios?: string | null
+  ubicacion?: string | null
+}
 
 export type PublicacionInput = {
   fuenteId: number
@@ -33,9 +43,89 @@ export type PublicacionInput = {
   notas?: string | null
 }
 
+function cleanFilter(value?: string | null) {
+  const cleaned = value?.trim()
+  return cleaned ? cleaned : null
+}
+
+function parseNumericFilter(value?: string | null) {
+  const cleaned = cleanFilter(value)
+  if (!cleaned) return null
+
+  if (cleaned.endsWith("+")) {
+    const parsed = Number.parseInt(cleaned.slice(0, -1), 10)
+    return Number.isNaN(parsed) ? null : { type: "gte" as const, value: parsed }
+  }
+
+  const parsed = Number.parseInt(cleaned, 10)
+  return Number.isNaN(parsed) ? null : { type: "eq" as const, value: parsed }
+}
+
+function isValidDate(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime())
+}
+
 // READ
-export async function getPublicaciones() {
-  return db
+export async function getPublicaciones(filters: PublicacionFilters = {}) {
+  const conditions = [] as Array<ReturnType<typeof sql>>
+
+  const id = cleanFilter(filters.id)
+  if (id) {
+    const parsedId = Number.parseInt(id, 10)
+    if (!Number.isNaN(parsedId)) {
+      conditions.push(eq(publicaciones.id, parsedId))
+    }
+  }
+
+  const tipoInmueble = cleanFilter(filters.tipoInmueble)
+  if (tipoInmueble) {
+    conditions.push(sql`${publicaciones.tipoInmueble} LIKE ${`%${tipoInmueble}%`}`)
+  }
+
+  const fuenteId = cleanFilter(filters.fuenteId)
+  if (fuenteId) {
+    const parsedFuenteId = Number.parseInt(fuenteId, 10)
+    if (!Number.isNaN(parsedFuenteId)) {
+      conditions.push(eq(publicaciones.fuenteId, parsedFuenteId))
+    }
+  }
+
+  const fecha = cleanFilter(filters.fecha)
+  if (fecha && isValidDate(fecha)) {
+    conditions.push(sql`DATE(${publicaciones.fechaCaptura}) = ${fecha}`)
+  }
+
+  const habitaciones = parseNumericFilter(filters.habitaciones)
+  if (habitaciones) {
+    conditions.push(
+      habitaciones.type === "gte"
+        ? sql`${publicaciones.habitaciones} >= ${habitaciones.value}`
+        : eq(publicaciones.habitaciones, habitaciones.value),
+    )
+  }
+
+  const banios = parseNumericFilter(filters.banios)
+  if (banios) {
+    conditions.push(
+      banios.type === "gte"
+        ? sql`${publicaciones.banios} >= ${banios.value}`
+        : eq(publicaciones.banios, banios.value),
+    )
+  }
+
+  const ubicacion = cleanFilter(filters.ubicacion)
+  if (ubicacion) {
+    const likePattern = `%${ubicacion}%`
+    conditions.push(sql`(
+      ${publicaciones.barrio} LIKE ${likePattern}
+      OR ${publicaciones.direccion} LIKE ${likePattern}
+      OR ${publicaciones.comuna} LIKE ${likePattern}
+      OR ${publicaciones.ph} LIKE ${likePattern}
+      OR ${publicaciones.ciudad} LIKE ${likePattern}
+    )`)
+  }
+
+  const query = db
     .select({
       id: publicaciones.id,
       fuenteId: publicaciones.fuenteId,
@@ -70,7 +160,10 @@ export async function getPublicaciones() {
     })
     .from(publicaciones)
     .leftJoin(fuentesInmobiliarias, eq(publicaciones.fuenteId, fuentesInmobiliarias.id))
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(publicaciones.fechaCaptura))
+
+  return query
 }
 
 export async function getFuentes() {
@@ -167,6 +260,19 @@ export async function updatePublicacion(id: number, input: PublicacionInput) {
 export async function deletePublicacion(id: number) {
   try {
     await db.delete(publicaciones).where(eq(publicaciones.id, id))
+    revalidatePath("/")
+    return { success: true as const }
+  } catch (error) {
+    return { success: false as const, error: parseError(error) }
+  }
+}
+
+export async function updateNotaPublicacion(id: number, nota: string | null) {
+  try {
+    await db
+      .update(publicaciones)
+      .set({ notas: nota?.trim() ? nota.trim() : null })
+      .where(eq(publicaciones.id, id))
     revalidatePath("/")
     return { success: true as const }
   } catch (error) {

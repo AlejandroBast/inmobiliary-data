@@ -1,9 +1,9 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -22,12 +22,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Card, CardContent } from "@/components/ui/card"
-import { Plus, Pencil, Trash2, ExternalLink, Search, Building2, ChevronLeft, ChevronRight, X } from "lucide-react"
+import { Plus, Pencil, Trash2, ExternalLink, Building2, ChevronLeft, ChevronRight, X, MessageSquareText } from "lucide-react"
 import { toast } from "sonner"
 import { PublicacionForm } from "./publicacion-form"
-import { deletePublicacion } from "@/app/actions/publicaciones"
+import { deletePublicacion, updateNotaPublicacion } from "@/app/actions/publicaciones"
 import { formatCOP, formatNumber, formatDate } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
+import { Textarea } from "@/components/ui/textarea"
 
 type Row = Record<string, any> & { id: number }
 type ImageItem = { name: string; src: string }
@@ -35,34 +36,42 @@ type ImageItem = { name: string; src: string }
 export function PublicacionesManager({
   publicaciones,
   fuentes,
+  hasActiveFilters,
 }: {
   publicaciones: Row[]
   fuentes: Fuente[]
+  hasActiveFilters: boolean
 }) {
-  const [query, setQuery] = useState("")
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
   const [detail, setDetail] = useState<Row | null>(null)
   const [detailImages, setDetailImages] = useState<ImageItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
   const [viewerIndex, setViewerIndex] = useState<number | null>(null)
+  const [notaDraft, setNotaDraft] = useState("")
+  const [notaSaving, setNotaSaving] = useState(false)
   const [toDelete, setToDelete] = useState<Row | null>(null)
   const [isPending, startTransition] = useTransition()
+  const router = useRouter()
 
   useEffect(() => {
     if (!detail) {
       setDetailImages([])
       setImagesLoading(false)
       setViewerIndex(null)
+      setNotaDraft("")
       return
     }
+
+    const currentDetail = detail
+    setNotaDraft(currentDetail.notas ?? "")
 
     const controller = new AbortController()
 
     async function loadImages() {
       setImagesLoading(true)
       try {
-        const response = await fetch(`/api/publicaciones/${detail.id}/imagenes`, {
+        const response = await fetch(`/api/publicaciones/${currentDetail.id}/imagenes`, {
           signal: controller.signal,
         })
 
@@ -90,6 +99,7 @@ export function PublicacionesManager({
   }, [detail])
 
   const viewerImage = viewerIndex !== null ? detailImages[viewerIndex] : null
+  const currentViewerIndex = viewerIndex ?? 0
 
   function openViewer(index: number) {
     setViewerIndex(index)
@@ -108,16 +118,6 @@ export function PublicacionesManager({
     if (viewerIndex === null || detailImages.length === 0) return
     setViewerIndex((viewerIndex + 1) % detailImages.length)
   }
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return publicaciones
-    return publicaciones.filter((p) =>
-      [p.barrio, p.direccion, p.tipoInmueble, p.ciudad, p.comuna, p.codigoExterno, p.fuenteNombre]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
-    )
-  }, [publicaciones, query])
 
   function openCreate() {
     setEditing(null)
@@ -142,17 +142,31 @@ export function PublicacionesManager({
     })
   }
 
+  async function saveNota() {
+    if (!detail) return
+
+    setNotaSaving(true)
+    try {
+      const res = await updateNotaPublicacion(detail.id, notaDraft)
+      if (res.success) {
+        toast.success("Nota guardada.")
+        setDetail((current) => (current ? { ...current, notas: notaDraft.trim() || null } : current))
+        router.refresh()
+      } else {
+        toast.error(res.error)
+      }
+    } finally {
+      setNotaSaving(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative w-full sm:max-w-sm">
-          <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Buscar por barrio, dirección, tipo..."
-            className="pl-9"
-          />
+        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+          {hasActiveFilters
+            ? "Mostrando publicaciones filtradas desde el servidor."
+            : "Mostrando todas las publicaciones registradas."}
         </div>
         <Button onClick={openCreate} className="gap-2">
           <Plus className="size-4" />
@@ -160,7 +174,7 @@ export function PublicacionesManager({
         </Button>
       </div>
 
-      {filtered.length === 0 ? (
+      {publicaciones.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
@@ -168,15 +182,17 @@ export function PublicacionesManager({
             </div>
             <div className="space-y-1">
               <p className="font-medium">
-                {publicaciones.length === 0 ? "Aún no hay publicaciones" : "Sin resultados"}
+                {hasActiveFilters ? "No se encontraron publicaciones con los filtros seleccionados." : "Aún no hay publicaciones"}
               </p>
               <p className="text-sm text-muted-foreground">
-                {publicaciones.length === 0
+                {hasActiveFilters
+                  ? "Prueba limpiando los filtros o ajustando uno de los criterios de búsqueda."
+                  : publicaciones.length === 0
                   ? "Crea tu primera publicación inmobiliaria para comenzar."
                   : "Prueba con otros términos de búsqueda."}
               </p>
             </div>
-            {publicaciones.length === 0 && (
+            {!hasActiveFilters && publicaciones.length === 0 && (
               <Button onClick={openCreate} className="gap-2">
                 <Plus className="size-4" />
                 Nueva publicación
@@ -204,7 +220,7 @@ export function PublicacionesManager({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filtered.map((p) => (
+                {publicaciones.map((p) => (
                   <TableRow
                     key={p.id}
                     className="cursor-pointer"
@@ -237,7 +253,16 @@ export function PublicacionesManager({
                     <TableCell className="text-center">{p.habitaciones ?? "—"}</TableCell>
                     <TableCell className="text-center">{p.banios ?? "—"}</TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
-                      <div className="flex justify-end gap-1">
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDetail(p)}
+                          className="gap-1"
+                        >
+                          <MessageSquareText className="size-4" />
+                          {p.notas ? "Editar nota" : "Agregar nota"}
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => openEdit(p)} aria-label="Editar">
                           <Pencil className="size-4" />
                         </Button>
@@ -323,6 +348,25 @@ export function PublicacionesManager({
                   <p className="text-sm whitespace-pre-wrap">{detail.notas}</p>
                 </div>
               )}
+              <div className="space-y-3 rounded-lg border bg-muted/30 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">Nota personalizada</p>
+                    <p className="text-xs text-muted-foreground">
+                      Agrega observaciones internas para esta publicación.
+                    </p>
+                  </div>
+                  <Button type="button" onClick={saveNota} disabled={notaSaving} className="shrink-0">
+                    {notaSaving ? "Guardando..." : "Guardar nota"}
+                  </Button>
+                </div>
+                <Textarea
+                  value={notaDraft}
+                  onChange={(event) => setNotaDraft(event.target.value)}
+                  placeholder="Escribe una nota interna..."
+                  rows={4}
+                />
+              </div>
               <div className="space-y-3">
                 <p className="text-xs font-medium text-muted-foreground">Imágenes</p>
                 {imagesLoading ? (
@@ -375,7 +419,7 @@ export function PublicacionesManager({
             <div className="relative flex min-h-[70vh] flex-col bg-black text-white">
               <div className="absolute left-0 right-0 top-0 z-10 flex items-center justify-between p-3">
                 <div className="rounded-full bg-black/60 px-3 py-1 text-xs text-white/80 backdrop-blur">
-                  {viewerIndex + 1} / {detailImages.length}
+                  {currentViewerIndex + 1} / {detailImages.length}
                 </div>
                 <Button
                   type="button"
@@ -392,7 +436,7 @@ export function PublicacionesManager({
               <div className="flex flex-1 items-center justify-center px-14 py-14">
                 <img
                   src={viewerImage.src}
-                  alt={`Imagen ${viewerIndex + 1} de la publicación ${detail.id}`}
+                  alt={`Imagen ${currentViewerIndex + 1} de la publicación ${detail.id}`}
                   className="max-h-[75vh] max-w-full rounded-xl object-contain shadow-2xl"
                 />
               </div>
