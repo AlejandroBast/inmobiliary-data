@@ -239,56 +239,52 @@ def extract_location(lines, title=None, text=None):
     ])
 
     for line in lines:
-        if "Pasto" in line and "Comuna" in line:
+        if "Pasto" in line:
             parts = [part.strip() for part in line.split(",") if part.strip()]
 
             ciudad = "Pasto"
-            comuna = None
             barrio = None
 
             for part in parts:
                 part_lower = part.lower()
 
-                if "comuna" in part_lower:
-                    comuna = part
-                elif "pasto" not in part_lower and "nariño" not in part_lower:
+                if "pasto" not in part_lower and "nariño" not in part_lower:
                     barrio = part
+                    break
 
             direccion = clean_text(", ".join(
-                [value for value in [barrio, comuna, ciudad, "Nariño"] if value]
+                [value for value in [barrio, ciudad, "Nariño"] if value]
             ))
 
-            return ciudad, comuna, barrio, direccion
+            return ciudad, barrio, direccion
 
     pattern = re.search(
-        r"ubicado en Nariño en Pasto en\s+([^,]+),\s*(Comuna\s*\d+)",
+        r"ubicado en Nariño en Pasto en\s+([^,]+)",
         full_text,
         re.IGNORECASE
     )
 
     if pattern:
         barrio = clean_text(pattern.group(1))
-        comuna = clean_text(pattern.group(2))
         ciudad = "Pasto"
-        direccion = clean_text(f"{barrio}, {comuna}, Pasto, Nariño")
+        direccion = clean_text(f"{barrio}, Pasto, Nariño")
 
-        return ciudad, comuna, barrio, direccion
+        return ciudad, barrio, direccion
 
     pattern = re.search(
-        r"Pasto en\s+([^,]+),\s*(Comuna\s*\d+)",
+        r"Pasto en\s+([^,]+)",
         full_text,
         re.IGNORECASE
     )
 
     if pattern:
         barrio = clean_text(pattern.group(1))
-        comuna = clean_text(pattern.group(2))
         ciudad = "Pasto"
-        direccion = clean_text(f"{barrio}, {comuna}, Pasto, Nariño")
+        direccion = clean_text(f"{barrio}, Pasto, Nariño")
 
-        return ciudad, comuna, barrio, direccion
+        return ciudad, barrio, direccion
 
-    return "Pasto", None, None, "Pasto, Nariño"
+    return "Pasto", None, "Pasto, Nariño"
 
 
 def extract_coordinates_from_source(html, text):
@@ -483,7 +479,6 @@ def insert_publicacion(connection, data):
             longitud,
             direccion,
             ciudad,
-            comuna,
             barrio,
             tipo_inmueble,
             ph,
@@ -510,7 +505,6 @@ def insert_publicacion(connection, data):
             %(longitud)s,
             %(direccion)s,
             %(ciudad)s,
-            %(comuna)s,
             %(barrio)s,
             %(tipo_inmueble)s,
             %(ph)s,
@@ -1038,7 +1032,7 @@ def extract_publication_data(page, url, fuente_id):
         print(f"[WARN] Publicación omitida por precio inválido: {url}")
         return None, html
 
-    ciudad, comuna, barrio, direccion = extract_location(
+    ciudad, barrio, direccion = extract_location(
         lines=lines,
         title=title,
         text=text
@@ -1092,7 +1086,9 @@ def extract_publication_data(page, url, fuente_id):
     pisos = extract_pisos(descripcion)
     administracion = extract_administracion(text)
 
-    direccion = direccion or f"{barrio or ''}, {comuna or ''}, {ciudad or 'Pasto'}, Nariño"
+    direccion = direccion or ", ".join(
+        [value for value in [barrio, ciudad or "Pasto", "Nariño"] if value]
+    )
     direccion = clean_text(direccion)
 
     links_adicionales = {
@@ -1110,7 +1106,6 @@ def extract_publication_data(page, url, fuente_id):
         "longitud": longitud,
         "direccion": direccion,
         "ciudad": ciudad or "Pasto",
-        "comuna": comuna,
         "barrio": barrio,
         "tipo_inmueble": tipo_inmueble,
         "ph": ph,
