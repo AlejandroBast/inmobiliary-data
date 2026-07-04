@@ -31,7 +31,6 @@ export const publicaciones = mysqlTable("publicaciones", {
   longitud: decimal("longitud", { precision: 10, scale: 7 }),
   direccion: text("direccion"),
   ciudad: varchar("ciudad", { length: 100 }).default("Pasto"),
-  comuna: varchar("comuna", { length: 100 }),
   barrio: varchar("barrio", { length: 150 }),
   tipoInmueble: varchar("tipo_inmueble", { length: 80 }),
   ph: text("ph"),

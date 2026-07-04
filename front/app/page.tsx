@@ -1,6 +1,8 @@
 import { getBarrios, getFuentes, getPublicaciones, type PublicacionFilters } from "@/app/actions/publicaciones"
+import { PublicacionesDashboard } from "@/components/publicaciones-dashboard"
 import { PublicacionesManager } from "@/components/publicaciones-manager"
 import { PublicacionesFiltros } from "@/components/publicaciones-filtros"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { Building2 } from "lucide-react"
 
 export const dynamic = "force-dynamic"
@@ -15,6 +17,13 @@ function firstValue(value: string | string[] | undefined) {
 
 function hasActiveFilters(filters: PublicacionFilters) {
   return Object.values(filters).some((value) => String(value ?? "").trim() !== "")
+}
+
+function numericFilterLabel(value: string | null | undefined, singular: string, plural: string) {
+  const cleanValue = String(value ?? "").trim()
+  if (!cleanValue) return null
+  if (cleanValue.endsWith("+")) return `${plural}: ${cleanValue.replace("+", " o mas")}`
+  return `${Number(cleanValue) === 1 ? singular : plural}: ${cleanValue}`
 }
 
 export default async function Page({
@@ -42,21 +51,43 @@ export default async function Page({
     getFuentes(),
     getBarrios(),
   ])
+  const filtersActive = hasActiveFilters(filtros)
+  const fuenteActiva = fuentes.find((fuente) => String(fuente.id) === String(filtros.fuenteId ?? ""))
+  const barrioActivo =
+    filtros.barrio === "__sin_barrio"
+      ? "Sin barrio"
+      : barriosData.barrios.find((barrio) => barrio.value === filtros.barrio)?.label
+
+  const activeFilters = [
+    filtros.id ? `ID: ${filtros.id}` : null,
+    filtros.tipoInmueble ? `Tipo: ${filtros.tipoInmueble}` : null,
+    filtros.fuenteId ? `Fuente: ${fuenteActiva?.nombre ?? filtros.fuenteId}` : null,
+    filtros.fecha ? `Fecha: ${filtros.fecha}` : null,
+    numericFilterLabel(filtros.habitaciones, "Habitacion", "Habitaciones"),
+    numericFilterLabel(filtros.banios, "Bano", "Banos"),
+    numericFilterLabel(filtros.parqueadero, "Parqueadero", "Parqueaderos"),
+    filtros.barrio ? `Barrio: ${barrioActivo ?? filtros.barrio}` : null,
+    filtros.precioMin ? `Precio desde: ${filtros.precioMin}` : null,
+    filtros.precioMax ? `Precio hasta: ${filtros.precioMax}` : null,
+  ].filter((filter): filter is string => Boolean(filter))
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <header className="mb-8 flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <Building2 className="size-6" />
+      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Building2 className="size-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-balance">
+              Publicaciones inmobiliarias
+            </h1>
+            <p className="text-sm text-muted-foreground">
+              Gestiona el inventario de inmuebles capturados: crear, ver, editar y eliminar.
+            </p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-balance">
-            Publicaciones inmobiliarias
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Gestiona el inventario de inmuebles capturados: crear, ver, editar y eliminar.
-          </p>
-        </div>
+        <ThemeToggle />
       </header>
 
       <div className="mb-6">
@@ -79,10 +110,18 @@ export default async function Page({
         />
       </div>
 
+      <div className="mb-6">
+        <PublicacionesDashboard
+          publicaciones={publicaciones}
+          hasActiveFilters={filtersActive}
+          activeFilters={activeFilters}
+        />
+      </div>
+
       <PublicacionesManager
         publicaciones={publicaciones}
         fuentes={fuentes}
-        hasActiveFilters={hasActiveFilters(filtros)}
+        hasActiveFilters={filtersActive}
       />
     </main>
   )

@@ -80,7 +80,6 @@ export function PublicacionForm({
       longitud: str("longitud"),
       direccion: str("direccion"),
       ciudad: str("ciudad"),
-      comuna: str("comuna"),
       barrio: str("barrio"),
       tipoInmueble: str("tipoInmueble"),
       ph: str("ph"),
@@ -195,14 +194,10 @@ export function PublicacionForm({
               <Label htmlFor="direccion">Dirección</Label>
               <Input id="direccion" name="direccion" defaultValue={val("direccion")} />
             </div>
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="ciudad">Ciudad</Label>
                 <Input id="ciudad" name="ciudad" defaultValue={editing ? val("ciudad") : "Pasto"} />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="comuna">Comuna</Label>
-                <Input id="comuna" name="comuna" defaultValue={val("comuna")} />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="barrio">Barrio</Label>

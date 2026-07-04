@@ -29,7 +29,6 @@ export type PublicacionInput = {
   longitud?: string | null
   direccion?: string | null
   ciudad?: string | null
-  comuna?: string | null
   barrio?: string | null
   tipoInmueble?: string | null
   ph?: string | null
@@ -227,7 +226,6 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
       longitud: publicaciones.longitud,
       direccion: publicaciones.direccion,
       ciudad: publicaciones.ciudad,
-      comuna: publicaciones.comuna,
       barrio: publicaciones.barrio,
       tipoInmueble: publicaciones.tipoInmueble,
       ph: publicaciones.ph,
@@ -338,7 +336,6 @@ function toValues(input: PublicacionInput) {
     longitud: input.longitud || null,
     direccion: input.direccion || null,
     ciudad: input.ciudad || null,
-    comuna: input.comuna || null,
     barrio: input.barrio || null,
     tipoInmueble: input.tipoInmueble || null,
     ph: input.ph || null,
