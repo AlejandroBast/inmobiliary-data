@@ -157,6 +157,44 @@ def extract_section(lines, start_label, stop_labels):
 # EXTRACCIÓN DE DATOS
 # ==========================================================
 
+TIPOS_INMUEBLE = [
+    "Apartamento",
+    "Casa",
+    "Lote",
+    "Oficina",
+    "Local",
+    "Apartaestudio",
+    "Edificio",
+    "Consultorio",
+    "Finca"
+]
+
+
+def extract_title_parts(title):
+    """
+    Extrae datos del h1 cuando viene con formato:
+    "Casa en venta, El dorado"
+    """
+
+    title = clean_text(title)
+
+    if not title or "," not in title:
+        return None, None
+
+    tipo_text, barrio_text = title.split(",", 1)
+
+    tipo_inmueble = None
+
+    for tipo in TIPOS_INMUEBLE:
+        if re.search(rf"\b{re.escape(tipo)}\b", tipo_text, re.IGNORECASE):
+            tipo_inmueble = tipo
+            break
+
+    barrio = clean_text(barrio_text)
+
+    return tipo_inmueble, barrio
+
+
 def extract_total_results(text):
     if not text:
         return None
@@ -232,6 +270,11 @@ def extract_number_by_keywords(text, keywords):
 
 
 def extract_location(lines, title=None, text=None):
+    _, title_barrio = extract_title_parts(title)
+
+    if title_barrio:
+        return "Pasto", title_barrio, f"{title_barrio}, Pasto, Nariño"
+
     full_text = " ".join([
         title or "",
         text or "",
@@ -332,21 +375,14 @@ def extract_coordinates_from_source(html, text):
 
 
 def extract_tipo_inmueble(title, text):
-    tipos = [
-        "Apartamento",
-        "Casa",
-        "Lote",
-        "Oficina",
-        "Local",
-        "Apartaestudio",
-        "Edificio",
-        "Consultorio",
-        "Finca"
-    ]
+    title_tipo, _ = extract_title_parts(title)
+
+    if title_tipo:
+        return title_tipo
 
     source = f"{title or ''} {text or ''}".lower()
 
-    for tipo in tipos:
+    for tipo in TIPOS_INMUEBLE:
         if tipo.lower() in source:
             return tipo
 
