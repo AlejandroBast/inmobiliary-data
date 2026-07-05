@@ -1,6 +1,13 @@
-import { getBarrios, getFuentes, getPublicaciones, type PublicacionFilters } from "@/app/actions/publicaciones"
+import {
+  getBarrios,
+  getFuentes,
+  getPublicaciones,
+  getPublicacionesTotal,
+  type PublicacionFilters,
+} from "@/app/actions/publicaciones"
 import { PublicacionesManager } from "@/components/publicaciones-manager"
 import { PublicacionesFiltros } from "@/components/publicaciones-filtros"
+import { PublicacionesStats } from "@/components/publicaciones-stats"
 import { Building2 } from "lucide-react"
 
 export const dynamic = "force-dynamic"
@@ -37,11 +44,14 @@ export default async function Page({
     parqueadero: firstValue(params.parqueadero),
   }
 
-  const [publicaciones, fuentes, barriosData] = await Promise.all([
+  const [publicaciones, fuentes, barriosData, totalPublicaciones] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
+    getPublicacionesTotal(),
   ])
+
+  const filtrosActivos = hasActiveFilters(filtros)
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -79,10 +89,18 @@ export default async function Page({
         />
       </div>
 
+      <div className="mb-6">
+        <PublicacionesStats
+          publicaciones={publicaciones}
+          totalPublicaciones={totalPublicaciones}
+          hasActiveFilters={filtrosActivos}
+        />
+      </div>
+
       <PublicacionesManager
         publicaciones={publicaciones}
         fuentes={fuentes}
-        hasActiveFilters={hasActiveFilters(filtros)}
+        hasActiveFilters={filtrosActivos}
       />
     </main>
   )
