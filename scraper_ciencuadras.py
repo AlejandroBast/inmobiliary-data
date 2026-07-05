@@ -7,6 +7,7 @@ import hashlib
 import requests
 import mysql.connector
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin
 from dotenv import load_dotenv
@@ -27,12 +28,27 @@ DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "port": int(os.getenv("DB_PORT", "3301")),
     "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "Nico123"),
+    "password": os.getenv("DB_PASSWORD", "boludo123"),
     "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
 }
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 MAX_PAGES = int(os.getenv("MAX_PAGES", "3"))
+
+GALLERY_VISIBLE_WAIT_MS = int(os.getenv("GALLERY_VISIBLE_WAIT_MS", "400"))
+GALLERY_OPEN_WAIT_MS = int(os.getenv("GALLERY_OPEN_WAIT_MS", "600"))
+GALLERY_CLICK_WAIT_MS = int(os.getenv("GALLERY_CLICK_WAIT_MS", "250"))
+GALLERY_STALLED_CLICKS = int(os.getenv("GALLERY_STALLED_CLICKS", "2"))
+GALLERY_MAX_NEXT_CLICKS = int(os.getenv("GALLERY_MAX_NEXT_CLICKS", "40"))
+
+IMAGE_DOWNLOAD_WORKERS = int(os.getenv("IMAGE_DOWNLOAD_WORKERS", "6"))
+IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "12"))
+
+SEARCH_LOAD_WAIT_MS = int(os.getenv("SEARCH_LOAD_WAIT_MS", "2500"))
+DETAIL_LOAD_WAIT_MS = int(os.getenv("DETAIL_LOAD_WAIT_MS", "1200"))
+PAGINATION_LOAD_WAIT_MS = int(os.getenv("PAGINATION_LOAD_WAIT_MS", "2000"))
+SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "1000"))
+REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "0.4"))
 
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,6 +173,44 @@ def extract_section(lines, start_label, stop_labels):
 # EXTRACCIÓN DE DATOS
 # ==========================================================
 
+TIPOS_INMUEBLE = [
+    "Apartamento",
+    "Casa",
+    "Lote",
+    "Oficina",
+    "Local",
+    "Apartaestudio",
+    "Edificio",
+    "Consultorio",
+    "Finca"
+]
+
+
+def extract_title_parts(title):
+    """
+    Extrae datos del h1 cuando viene con formato:
+    "Casa en venta, El dorado"
+    """
+
+    title = clean_text(title)
+
+    if not title or "," not in title:
+        return None, None
+
+    tipo_text, barrio_text = title.split(",", 1)
+
+    tipo_inmueble = None
+
+    for tipo in TIPOS_INMUEBLE:
+        if re.search(rf"\b{re.escape(tipo)}\b", tipo_text, re.IGNORECASE):
+            tipo_inmueble = tipo
+            break
+
+    barrio = clean_text(barrio_text)
+
+    return tipo_inmueble, barrio
+
+
 def extract_total_results(text):
     if not text:
         return None
@@ -232,6 +286,11 @@ def extract_number_by_keywords(text, keywords):
 
 
 def extract_location(lines, title=None, text=None):
+    _, title_barrio = extract_title_parts(title)
+
+    if title_barrio:
+        return "Pasto", title_barrio, f"{title_barrio}, Pasto, Nariño"
+
     full_text = " ".join([
         title or "",
         text or "",
@@ -332,21 +391,14 @@ def extract_coordinates_from_source(html, text):
 
 
 def extract_tipo_inmueble(title, text):
-    tipos = [
-        "Apartamento",
-        "Casa",
-        "Lote",
-        "Oficina",
-        "Local",
-        "Apartaestudio",
-        "Edificio",
-        "Consultorio",
-        "Finca"
-    ]
+    title_tipo, _ = extract_title_parts(title)
+
+    if title_tipo:
+        return title_tipo
 
     source = f"{title or ''} {text or ''}".lower()
 
-    for tipo in tipos:
+    for tipo in TIPOS_INMUEBLE:
         if tipo.lower() in source:
             return tipo
 
@@ -637,23 +689,133 @@ def save_screenshot(page, codigo_archivo, publicacion_id):
         return None
 
 
-def collect_image_urls(page):
-    try:
-        image_urls = page.eval_on_selector_all(
-            "img",
-            """
-            imgs => imgs
-                .map(img => img.currentSrc || img.src || img.getAttribute('src'))
-                .filter(Boolean)
-            """
-        )
-    except Exception:
-        return []
+GALLERY_SELECTORS = (
+    ".carousel-gallery, "
+    "article.gallery-contain-wrapper, "
+    "ciencuadras-mini-gallery, "
+    "ciencuadras-cc-p-gallery-full, "
+    ".full-gallery"
+)
 
+FULL_GALLERY_SELECTORS = (
+    ".p-dialog, "
+    ".p-galleria, "
+    ".full-gallery, "
+    "ciencuadras-cc-p-gallery, "
+    "ciencuadras-cc-p-gallery-full"
+)
+
+IMAGE_URL_COLLECTOR_JS = """
+containers => {
+    const urls = [];
+
+    const addCandidate = (candidates, value) => {
+        if (!value) {
+            return;
+        }
+
+        String(value)
+            .split(',')
+            .map(item => item.trim().split(/\\s+/)[0])
+            .filter(Boolean)
+            .forEach(url => candidates.push(url));
+    };
+
+    const isBlockedImage = (url) => {
+        const lower = String(url).toLowerCase();
+
+        return lower.includes('default-image')
+            || lower.includes('/sources/images/default')
+            || lower.includes('zgvmyxvsdc1pbwfnzs5wbm')
+            || lower.includes('logo')
+            || lower.includes('.svg')
+            || lower.startsWith('data:');
+    };
+
+    const selectBestUrl = (candidates) => {
+        const cleanCandidates = candidates.filter(url => !isBlockedImage(url));
+        const original = cleanCandidates.find(url => url.includes('www-img-cc.s3.amazonaws.com'));
+
+        if (original) {
+            return original;
+        }
+
+        return cleanCandidates[0] || null;
+    };
+
+    const collectFromElement = (element) => {
+        const candidates = [];
+
+        addCandidate(candidates, element.getAttribute('data-src'));
+        addCandidate(candidates, element.getAttribute('lazyload'));
+        addCandidate(candidates, element.getAttribute('srcset'));
+        addCandidate(candidates, element.getAttribute('src'));
+        addCandidate(candidates, element.currentSrc);
+
+        const bestUrl = selectBestUrl(candidates);
+
+        if (bestUrl) {
+            urls.push(bestUrl);
+        }
+    };
+
+    containers.forEach(container => {
+        container.querySelectorAll('picture').forEach(picture => {
+            const candidates = [];
+
+            picture.querySelectorAll('source').forEach(source => {
+                addCandidate(candidates, source.getAttribute('srcset'));
+                addCandidate(candidates, source.getAttribute('data-src'));
+                addCandidate(candidates, source.getAttribute('lazyload'));
+            });
+
+            picture.querySelectorAll('img').forEach(img => {
+                addCandidate(candidates, img.getAttribute('data-src'));
+                addCandidate(candidates, img.currentSrc);
+                addCandidate(candidates, img.getAttribute('src'));
+                addCandidate(candidates, img.getAttribute('srcset'));
+            });
+
+            const bestUrl = selectBestUrl(candidates);
+
+            if (bestUrl) {
+                urls.push(bestUrl);
+            }
+        });
+
+        container.querySelectorAll('source, img').forEach(element => {
+            if (element.closest('picture')) {
+                return;
+            }
+
+            collectFromElement(element);
+        });
+
+        container.querySelectorAll('[style*="background-image"]').forEach(element => {
+            const style = element.getAttribute('style') || '';
+            const matches = Array.from(style.matchAll(/url\\(["']?([^"')]+)["']?\\)/gi));
+
+            matches.forEach(match => {
+                if (match[1] && !isBlockedImage(match[1])) {
+                    urls.push(match[1]);
+                }
+            });
+        });
+    });
+
+    return Array.from(new Set(urls));
+}
+"""
+
+
+def normalize_image_urls(image_urls):
     cleaned = []
 
-    for image_url in image_urls:
-        image_url = urljoin(BASE_URL, image_url)
+    for image_url in image_urls or []:
+        if not str(image_url).strip():
+            continue
+
+        image_url = urljoin(BASE_URL, str(image_url).strip())
         lower = image_url.lower()
 
         if lower.startswith("data:"):
@@ -662,13 +824,200 @@ def collect_image_urls(page):
         if ".svg" in lower:
             continue
 
+        if "default-image" in lower or "zgvmyxvsdc1pbwfnzs5wbm" in lower:
+            continue
+
         if "logo" in lower:
             continue
 
         if image_url not in cleaned:
             cleaned.append(image_url)
 
-    return cleaned[:20]
+    return cleaned
+
+
+def collect_image_urls_from_selectors(page, selectors):
+    try:
+        image_urls = page.eval_on_selector_all(
+            selectors,
+            IMAGE_URL_COLLECTOR_JS
+        )
+
+        return normalize_image_urls(image_urls)
+    except Exception:
+        return []
+
+
+def click_open_full_gallery(page):
+    try:
+        return page.evaluate(
+            """
+            () => {
+                const isVisible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none';
+                };
+
+                const containers = Array.from(
+                    document.querySelectorAll('.carousel-gallery, article.gallery-contain-wrapper')
+                );
+
+                for (const container of containers) {
+                    const buttons = Array.from(
+                        container.querySelectorAll('button, a, [role="button"], ciencuadras-button')
+                    );
+
+                    const target = buttons.find(el => {
+                        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        const qa = (
+                            el.getAttribute('data-qa-id')
+                            || el.getAttribute('tagqa')
+                            || ''
+                        ).toLowerCase();
+
+                        return isVisible(el)
+                            && (
+                                text.includes('ver fotos')
+                                || qa.includes('open_full_gallery')
+                                || qa.includes('mini_gallery')
+                            );
+                    });
+
+                    if (target) {
+                        const clickable = target.closest('button, a, [role="button"]') || target;
+                        clickable.scrollIntoView({ block: 'center' });
+                        clickable.click();
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            """
+        )
+    except Exception:
+        return False
+
+
+def click_next_gallery_image(page):
+    try:
+        return page.evaluate(
+            """
+            () => {
+                const isVisible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none';
+                };
+
+                const roots = Array.from(
+                    document.querySelectorAll('.p-dialog, .p-galleria, .full-gallery')
+                ).filter(isVisible);
+
+                const root = roots[0] || document;
+                const elements = Array.from(
+                    root.querySelectorAll('button, a, span, div, [role="button"]')
+                );
+
+                const candidates = elements.filter(el => {
+                    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || '').toLowerCase();
+                    const cls = (el.getAttribute('class') || '').toLowerCase();
+
+                    return isVisible(el)
+                        && (
+                            cls.includes('next')
+                            || cls.includes('chevron-right')
+                            || text === '>'
+                            || text === '›'
+                            || aria.includes('siguiente')
+                            || aria.includes('next')
+                            || title.includes('siguiente')
+                            || title.includes('next')
+                        );
+                });
+
+                if (!candidates.length) {
+                    return false;
+                }
+
+                const target = candidates[0].closest('button, a, [role="button"]') || candidates[0];
+                target.click();
+                return true;
+            }
+            """
+        )
+    except Exception:
+        return False
+
+
+def collect_full_gallery_image_urls(page):
+    image_urls = []
+
+    if not click_open_full_gallery(page):
+        return image_urls
+
+    page.wait_for_timeout(GALLERY_OPEN_WAIT_MS)
+
+    last_count = 0
+    stalled_clicks = 0
+
+    for _ in range(GALLERY_MAX_NEXT_CLICKS):
+        image_urls.extend(
+            collect_image_urls_from_selectors(page, FULL_GALLERY_SELECTORS)
+        )
+
+        image_urls = normalize_image_urls(image_urls)
+        current_count = len(image_urls)
+
+        if current_count == last_count:
+            stalled_clicks += 1
+        else:
+            stalled_clicks = 0
+
+        last_count = current_count
+
+        if stalled_clicks >= GALLERY_STALLED_CLICKS:
+            break
+
+        if not click_next_gallery_image(page):
+            break
+
+        page.wait_for_timeout(GALLERY_CLICK_WAIT_MS)
+
+    return normalize_image_urls(image_urls)
+
+
+def collect_image_urls(page):
+    try:
+        page.locator(".carousel-gallery").first.scroll_into_view_if_needed(timeout=5000)
+        page.wait_for_timeout(GALLERY_VISIBLE_WAIT_MS)
+    except Exception:
+        pass
+
+    image_urls = []
+    image_urls.extend(collect_image_urls_from_selectors(page, GALLERY_SELECTORS))
+
+    print(f"[INFO] Fotos detectadas en galeria visible: {len(normalize_image_urls(image_urls))}")
+
+    full_gallery_urls = collect_full_gallery_image_urls(page)
+    image_urls.extend(full_gallery_urls)
+
+    image_urls = normalize_image_urls(image_urls)
+
+    print(f"[INFO] Total fotos detectadas para descargar: {len(image_urls)}")
+
+    return image_urls
 
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
@@ -677,10 +1026,10 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     try:
         response = requests.get(
             image_url,
-            timeout=20,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
+                timeout=IMAGE_DOWNLOAD_TIMEOUT,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                }
         )
 
         response.raise_for_status()
@@ -705,6 +1054,45 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     except Exception as error:
         print(f"[WARN] No se pudo descargar imagen: {image_url} | {error}")
         return None
+
+
+def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
+    if not image_urls:
+        return []
+
+    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
+    downloaded = []
+
+    print(f"[INFO] Descargando {len(image_urls)} fotos con {workers} hilos")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                download_image,
+                image_url,
+                codigo_archivo,
+                index,
+                publicacion_id
+            ): (index, image_url)
+            for index, image_url in enumerate(image_urls, start=1)
+        }
+
+        for future in as_completed(futures):
+            index, image_url = futures[future]
+
+            try:
+                image_path = future.result()
+            except Exception as error:
+                print(f"[WARN] No se pudo descargar imagen {index}: {error}")
+                continue
+
+            if image_path:
+                print(f"[OK] Foto descargada {index}/{len(image_urls)}")
+                downloaded.append((index, image_url, image_path))
+
+    downloaded.sort(key=lambda item: item[0])
+
+    return downloaded
 
 
 # ==========================================================
@@ -738,7 +1126,7 @@ def wait_for_links_change(page, old_signature, timeout_seconds=12):
     start = time.time()
 
     while time.time() - start < timeout_seconds:
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(400)
 
         new_signature = links_signature(page)
 
@@ -752,7 +1140,7 @@ def click_pagination_number(page, page_number):
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
         locator = page.get_by_text(str(page_number), exact=True)
@@ -768,7 +1156,7 @@ def click_pagination_number(page, page_number):
                     continue
 
                 item.scroll_into_view_if_needed(timeout=3000)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(250)
                 item.click(timeout=3000, force=True)
 
                 if wait_for_links_change(page, old_signature):
@@ -867,7 +1255,7 @@ def click_next_page(page):
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
         clicked = page.evaluate(
@@ -941,7 +1329,7 @@ def collect_publication_links(page):
     except PlaywrightTimeoutError:
         pass
 
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(SEARCH_LOAD_WAIT_MS)
 
     body_text = page.locator("body").inner_text(timeout=15000)
     total_results = extract_total_results(body_text)
@@ -984,10 +1372,10 @@ def collect_publication_links(page):
             except PlaywrightTimeoutError:
                 pass
 
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(PAGINATION_LOAD_WAIT_MS)
 
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(SCROLL_WAIT_MS)
 
         links = get_current_page_links(page)
 
@@ -1014,7 +1402,7 @@ def extract_publication_data(page, url, fuente_id):
     except PlaywrightTimeoutError:
         pass
 
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(DETAIL_LOAD_WAIT_MS)
 
     html = page.content()
     text = page.locator("body").inner_text(timeout=15000)
@@ -1227,22 +1615,23 @@ def main():
 
                 image_urls = collect_image_urls(page)
 
-                for img_index, image_url in enumerate(image_urls, start=1):
-                    image_path = download_image(
-                        image_url=image_url,
-                        codigo_archivo=codigo_archivo,
-                        index=img_index,
-                        publicacion_id=publicacion_id
-                    )
+                if not image_urls:
+                    print("[WARN] No se detectaron fotos para descargar.")
 
-                    if image_path:
-                        insert_evidencia(
-                            connection=connection,
-                            publicacion_id=publicacion_id,
-                            tipo="imagen",
-                            ruta_archivo=image_path,
-                            url_original=image_url
-                        )
+                downloaded_images = download_images_parallel(
+                    image_urls=image_urls,
+                    codigo_archivo=codigo_archivo,
+                    publicacion_id=publicacion_id
+                )
+
+                for _, image_url, image_path in downloaded_images:
+                    insert_evidencia(
+                        connection=connection,
+                        publicacion_id=publicacion_id,
+                        tipo="imagen",
+                        ruta_archivo=image_path,
+                        url_original=image_url
+                    )
 
                 print(f"[OK] Guardada publicación nueva ID {publicacion_id}")
                 print(f"[OK] Código externo: {data['codigo_externo']}")
@@ -1252,7 +1641,8 @@ def main():
                 print(f"[OK] Coordenadas: {data['coordenadas']}")
                 print(f"[OK] Carpeta evidencias: evidencias/publicacion_{publicacion_id}")
 
-                time.sleep(2)
+                if REQUEST_PAUSE_SECONDS > 0:
+                    time.sleep(REQUEST_PAUSE_SECONDS)
 
             except Exception as error:
                 total_errores += 1
