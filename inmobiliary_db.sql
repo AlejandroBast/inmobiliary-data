@@ -38,6 +38,7 @@ CREATE TABLE publicaciones (
 
     direccion TEXT,
     ciudad VARCHAR(100) DEFAULT 'Pasto',
+    comuna VARCHAR(100),
     barrio VARCHAR(150),
 
     tipo_inmueble VARCHAR(80),
