@@ -673,23 +673,133 @@ def save_screenshot(page, codigo_archivo, publicacion_id):
         return None
 
 
-def collect_image_urls(page):
-    try:
-        image_urls = page.eval_on_selector_all(
-            "img",
-            """
-            imgs => imgs
-                .map(img => img.currentSrc || img.src || img.getAttribute('src'))
-                .filter(Boolean)
-            """
-        )
-    except Exception:
-        return []
+GALLERY_SELECTORS = (
+    ".carousel-gallery, "
+    "article.gallery-contain-wrapper, "
+    "ciencuadras-mini-gallery, "
+    "ciencuadras-cc-p-gallery-full, "
+    ".full-gallery"
+)
 
+FULL_GALLERY_SELECTORS = (
+    ".p-dialog, "
+    ".p-galleria, "
+    ".full-gallery, "
+    "ciencuadras-cc-p-gallery, "
+    "ciencuadras-cc-p-gallery-full"
+)
+
+IMAGE_URL_COLLECTOR_JS = """
+containers => {
+    const urls = [];
+
+    const addCandidate = (candidates, value) => {
+        if (!value) {
+            return;
+        }
+
+        String(value)
+            .split(',')
+            .map(item => item.trim().split(/\\s+/)[0])
+            .filter(Boolean)
+            .forEach(url => candidates.push(url));
+    };
+
+    const isBlockedImage = (url) => {
+        const lower = String(url).toLowerCase();
+
+        return lower.includes('default-image')
+            || lower.includes('/sources/images/default')
+            || lower.includes('zgvmyxvsdc1pbwfnzs5wbm')
+            || lower.includes('logo')
+            || lower.includes('.svg')
+            || lower.startsWith('data:');
+    };
+
+    const selectBestUrl = (candidates) => {
+        const cleanCandidates = candidates.filter(url => !isBlockedImage(url));
+        const original = cleanCandidates.find(url => url.includes('www-img-cc.s3.amazonaws.com'));
+
+        if (original) {
+            return original;
+        }
+
+        return cleanCandidates[0] || null;
+    };
+
+    const collectFromElement = (element) => {
+        const candidates = [];
+
+        addCandidate(candidates, element.getAttribute('data-src'));
+        addCandidate(candidates, element.getAttribute('lazyload'));
+        addCandidate(candidates, element.getAttribute('srcset'));
+        addCandidate(candidates, element.getAttribute('src'));
+        addCandidate(candidates, element.currentSrc);
+
+        const bestUrl = selectBestUrl(candidates);
+
+        if (bestUrl) {
+            urls.push(bestUrl);
+        }
+    };
+
+    containers.forEach(container => {
+        container.querySelectorAll('picture').forEach(picture => {
+            const candidates = [];
+
+            picture.querySelectorAll('source').forEach(source => {
+                addCandidate(candidates, source.getAttribute('srcset'));
+                addCandidate(candidates, source.getAttribute('data-src'));
+                addCandidate(candidates, source.getAttribute('lazyload'));
+            });
+
+            picture.querySelectorAll('img').forEach(img => {
+                addCandidate(candidates, img.getAttribute('data-src'));
+                addCandidate(candidates, img.currentSrc);
+                addCandidate(candidates, img.getAttribute('src'));
+                addCandidate(candidates, img.getAttribute('srcset'));
+            });
+
+            const bestUrl = selectBestUrl(candidates);
+
+            if (bestUrl) {
+                urls.push(bestUrl);
+            }
+        });
+
+        container.querySelectorAll('source, img').forEach(element => {
+            if (element.closest('picture')) {
+                return;
+            }
+
+            collectFromElement(element);
+        });
+
+        container.querySelectorAll('[style*="background-image"]').forEach(element => {
+            const style = element.getAttribute('style') || '';
+            const matches = Array.from(style.matchAll(/url\\(["']?([^"')]+)["']?\\)/gi));
+
+            matches.forEach(match => {
+                if (match[1] && !isBlockedImage(match[1])) {
+                    urls.push(match[1]);
+                }
+            });
+        });
+    });
+
+    return Array.from(new Set(urls));
+}
+"""
+
+
+def normalize_image_urls(image_urls):
     cleaned = []
 
-    for image_url in image_urls:
-        image_url = urljoin(BASE_URL, image_url)
+    for image_url in image_urls or []:
+        if not str(image_url).strip():
+            continue
+
+        image_url = urljoin(BASE_URL, str(image_url).strip())
         lower = image_url.lower()
 
         if lower.startswith("data:"):
@@ -698,13 +808,200 @@ def collect_image_urls(page):
         if ".svg" in lower:
             continue
 
+        if "default-image" in lower or "zgvmyxvsdc1pbwfnzs5wbm" in lower:
+            continue
+
         if "logo" in lower:
             continue
 
         if image_url not in cleaned:
             cleaned.append(image_url)
 
-    return cleaned[:20]
+    return cleaned
+
+
+def collect_image_urls_from_selectors(page, selectors):
+    try:
+        image_urls = page.eval_on_selector_all(
+            selectors,
+            IMAGE_URL_COLLECTOR_JS
+        )
+
+        return normalize_image_urls(image_urls)
+    except Exception:
+        return []
+
+
+def click_open_full_gallery(page):
+    try:
+        return page.evaluate(
+            """
+            () => {
+                const isVisible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none';
+                };
+
+                const containers = Array.from(
+                    document.querySelectorAll('.carousel-gallery, article.gallery-contain-wrapper')
+                );
+
+                for (const container of containers) {
+                    const buttons = Array.from(
+                        container.querySelectorAll('button, a, [role="button"], ciencuadras-button')
+                    );
+
+                    const target = buttons.find(el => {
+                        const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                        const qa = (
+                            el.getAttribute('data-qa-id')
+                            || el.getAttribute('tagqa')
+                            || ''
+                        ).toLowerCase();
+
+                        return isVisible(el)
+                            && (
+                                text.includes('ver fotos')
+                                || qa.includes('open_full_gallery')
+                                || qa.includes('mini_gallery')
+                            );
+                    });
+
+                    if (target) {
+                        const clickable = target.closest('button, a, [role="button"]') || target;
+                        clickable.scrollIntoView({ block: 'center' });
+                        clickable.click();
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            """
+        )
+    except Exception:
+        return False
+
+
+def click_next_gallery_image(page):
+    try:
+        return page.evaluate(
+            """
+            () => {
+                const isVisible = (el) => {
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+
+                    return rect.width > 0
+                        && rect.height > 0
+                        && style.visibility !== 'hidden'
+                        && style.display !== 'none';
+                };
+
+                const roots = Array.from(
+                    document.querySelectorAll('.p-dialog, .p-galleria, .full-gallery')
+                ).filter(isVisible);
+
+                const root = roots[0] || document;
+                const elements = Array.from(
+                    root.querySelectorAll('button, a, span, div, [role="button"]')
+                );
+
+                const candidates = elements.filter(el => {
+                    const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    const aria = (el.getAttribute('aria-label') || '').toLowerCase();
+                    const title = (el.getAttribute('title') || '').toLowerCase();
+                    const cls = (el.getAttribute('class') || '').toLowerCase();
+
+                    return isVisible(el)
+                        && (
+                            cls.includes('next')
+                            || cls.includes('chevron-right')
+                            || text === '>'
+                            || text === '›'
+                            || aria.includes('siguiente')
+                            || aria.includes('next')
+                            || title.includes('siguiente')
+                            || title.includes('next')
+                        );
+                });
+
+                if (!candidates.length) {
+                    return false;
+                }
+
+                const target = candidates[0].closest('button, a, [role="button"]') || candidates[0];
+                target.click();
+                return true;
+            }
+            """
+        )
+    except Exception:
+        return False
+
+
+def collect_full_gallery_image_urls(page):
+    image_urls = []
+
+    if not click_open_full_gallery(page):
+        return image_urls
+
+    page.wait_for_timeout(1500)
+
+    last_count = 0
+    stalled_clicks = 0
+
+    for _ in range(80):
+        image_urls.extend(
+            collect_image_urls_from_selectors(page, FULL_GALLERY_SELECTORS)
+        )
+
+        image_urls = normalize_image_urls(image_urls)
+        current_count = len(image_urls)
+
+        if current_count == last_count:
+            stalled_clicks += 1
+        else:
+            stalled_clicks = 0
+
+        last_count = current_count
+
+        if stalled_clicks >= 6:
+            break
+
+        if not click_next_gallery_image(page):
+            break
+
+        page.wait_for_timeout(700)
+
+    return normalize_image_urls(image_urls)
+
+
+def collect_image_urls(page):
+    try:
+        page.locator(".carousel-gallery").first.scroll_into_view_if_needed(timeout=5000)
+        page.wait_for_timeout(1500)
+    except Exception:
+        pass
+
+    image_urls = []
+    image_urls.extend(collect_image_urls_from_selectors(page, GALLERY_SELECTORS))
+
+    print(f"[INFO] Fotos detectadas en galeria visible: {len(normalize_image_urls(image_urls))}")
+
+    full_gallery_urls = collect_full_gallery_image_urls(page)
+    image_urls.extend(full_gallery_urls)
+
+    image_urls = normalize_image_urls(image_urls)
+
+    print(f"[INFO] Total fotos detectadas para descargar: {len(image_urls)}")
+
+    return image_urls
 
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
@@ -1263,7 +1560,12 @@ def main():
 
                 image_urls = collect_image_urls(page)
 
+                if not image_urls:
+                    print("[WARN] No se detectaron fotos para descargar.")
+
                 for img_index, image_url in enumerate(image_urls, start=1):
+                    print(f"[INFO] Descargando foto {img_index}/{len(image_urls)}")
+
                     image_path = download_image(
                         image_url=image_url,
                         codigo_archivo=codigo_archivo,
