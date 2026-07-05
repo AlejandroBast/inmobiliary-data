@@ -254,6 +254,16 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
   return query
 }
 
+export async function getPublicacionesTotal() {
+  const [row] = await db
+    .select({
+      total: sql<number>`COUNT(*)`,
+    })
+    .from(publicaciones)
+
+  return Number(row?.total ?? 0)
+}
+
 export async function getFuentes() {
   return db.select().from(fuentesInmobiliarias).orderBy(fuentesInmobiliarias.nombre)
 }
