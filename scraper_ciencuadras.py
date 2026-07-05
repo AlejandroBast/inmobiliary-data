@@ -7,6 +7,7 @@ import hashlib
 import requests
 import mysql.connector
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin
 from dotenv import load_dotenv
@@ -33,6 +34,21 @@ DB_CONFIG = {
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 MAX_PAGES = int(os.getenv("MAX_PAGES", "3"))
+
+GALLERY_VISIBLE_WAIT_MS = int(os.getenv("GALLERY_VISIBLE_WAIT_MS", "400"))
+GALLERY_OPEN_WAIT_MS = int(os.getenv("GALLERY_OPEN_WAIT_MS", "600"))
+GALLERY_CLICK_WAIT_MS = int(os.getenv("GALLERY_CLICK_WAIT_MS", "250"))
+GALLERY_STALLED_CLICKS = int(os.getenv("GALLERY_STALLED_CLICKS", "2"))
+GALLERY_MAX_NEXT_CLICKS = int(os.getenv("GALLERY_MAX_NEXT_CLICKS", "40"))
+
+IMAGE_DOWNLOAD_WORKERS = int(os.getenv("IMAGE_DOWNLOAD_WORKERS", "6"))
+IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "12"))
+
+SEARCH_LOAD_WAIT_MS = int(os.getenv("SEARCH_LOAD_WAIT_MS", "2500"))
+DETAIL_LOAD_WAIT_MS = int(os.getenv("DETAIL_LOAD_WAIT_MS", "1200"))
+PAGINATION_LOAD_WAIT_MS = int(os.getenv("PAGINATION_LOAD_WAIT_MS", "2000"))
+SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "1000"))
+REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "0.4"))
 
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
@@ -951,12 +967,12 @@ def collect_full_gallery_image_urls(page):
     if not click_open_full_gallery(page):
         return image_urls
 
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(GALLERY_OPEN_WAIT_MS)
 
     last_count = 0
     stalled_clicks = 0
 
-    for _ in range(80):
+    for _ in range(GALLERY_MAX_NEXT_CLICKS):
         image_urls.extend(
             collect_image_urls_from_selectors(page, FULL_GALLERY_SELECTORS)
         )
@@ -971,13 +987,13 @@ def collect_full_gallery_image_urls(page):
 
         last_count = current_count
 
-        if stalled_clicks >= 6:
+        if stalled_clicks >= GALLERY_STALLED_CLICKS:
             break
 
         if not click_next_gallery_image(page):
             break
 
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(GALLERY_CLICK_WAIT_MS)
 
     return normalize_image_urls(image_urls)
 
@@ -985,7 +1001,7 @@ def collect_full_gallery_image_urls(page):
 def collect_image_urls(page):
     try:
         page.locator(".carousel-gallery").first.scroll_into_view_if_needed(timeout=5000)
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(GALLERY_VISIBLE_WAIT_MS)
     except Exception:
         pass
 
@@ -1010,10 +1026,10 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     try:
         response = requests.get(
             image_url,
-            timeout=20,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            }
+                timeout=IMAGE_DOWNLOAD_TIMEOUT,
+                headers={
+                    "User-Agent": "Mozilla/5.0"
+                }
         )
 
         response.raise_for_status()
@@ -1038,6 +1054,45 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     except Exception as error:
         print(f"[WARN] No se pudo descargar imagen: {image_url} | {error}")
         return None
+
+
+def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
+    if not image_urls:
+        return []
+
+    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
+    downloaded = []
+
+    print(f"[INFO] Descargando {len(image_urls)} fotos con {workers} hilos")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                download_image,
+                image_url,
+                codigo_archivo,
+                index,
+                publicacion_id
+            ): (index, image_url)
+            for index, image_url in enumerate(image_urls, start=1)
+        }
+
+        for future in as_completed(futures):
+            index, image_url = futures[future]
+
+            try:
+                image_path = future.result()
+            except Exception as error:
+                print(f"[WARN] No se pudo descargar imagen {index}: {error}")
+                continue
+
+            if image_path:
+                print(f"[OK] Foto descargada {index}/{len(image_urls)}")
+                downloaded.append((index, image_url, image_path))
+
+    downloaded.sort(key=lambda item: item[0])
+
+    return downloaded
 
 
 # ==========================================================
@@ -1071,7 +1126,7 @@ def wait_for_links_change(page, old_signature, timeout_seconds=12):
     start = time.time()
 
     while time.time() - start < timeout_seconds:
-        page.wait_for_timeout(700)
+        page.wait_for_timeout(400)
 
         new_signature = links_signature(page)
 
@@ -1085,7 +1140,7 @@ def click_pagination_number(page, page_number):
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
         locator = page.get_by_text(str(page_number), exact=True)
@@ -1101,7 +1156,7 @@ def click_pagination_number(page, page_number):
                     continue
 
                 item.scroll_into_view_if_needed(timeout=3000)
-                page.wait_for_timeout(500)
+                page.wait_for_timeout(250)
                 item.click(timeout=3000, force=True)
 
                 if wait_for_links_change(page, old_signature):
@@ -1200,7 +1255,7 @@ def click_next_page(page):
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
         clicked = page.evaluate(
@@ -1274,7 +1329,7 @@ def collect_publication_links(page):
     except PlaywrightTimeoutError:
         pass
 
-    page.wait_for_timeout(4000)
+    page.wait_for_timeout(SEARCH_LOAD_WAIT_MS)
 
     body_text = page.locator("body").inner_text(timeout=15000)
     total_results = extract_total_results(body_text)
@@ -1317,10 +1372,10 @@ def collect_publication_links(page):
             except PlaywrightTimeoutError:
                 pass
 
-            page.wait_for_timeout(4000)
+            page.wait_for_timeout(PAGINATION_LOAD_WAIT_MS)
 
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(SCROLL_WAIT_MS)
 
         links = get_current_page_links(page)
 
@@ -1347,7 +1402,7 @@ def extract_publication_data(page, url, fuente_id):
     except PlaywrightTimeoutError:
         pass
 
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(DETAIL_LOAD_WAIT_MS)
 
     html = page.content()
     text = page.locator("body").inner_text(timeout=15000)
@@ -1563,24 +1618,20 @@ def main():
                 if not image_urls:
                     print("[WARN] No se detectaron fotos para descargar.")
 
-                for img_index, image_url in enumerate(image_urls, start=1):
-                    print(f"[INFO] Descargando foto {img_index}/{len(image_urls)}")
+                downloaded_images = download_images_parallel(
+                    image_urls=image_urls,
+                    codigo_archivo=codigo_archivo,
+                    publicacion_id=publicacion_id
+                )
 
-                    image_path = download_image(
-                        image_url=image_url,
-                        codigo_archivo=codigo_archivo,
-                        index=img_index,
-                        publicacion_id=publicacion_id
+                for _, image_url, image_path in downloaded_images:
+                    insert_evidencia(
+                        connection=connection,
+                        publicacion_id=publicacion_id,
+                        tipo="imagen",
+                        ruta_archivo=image_path,
+                        url_original=image_url
                     )
-
-                    if image_path:
-                        insert_evidencia(
-                            connection=connection,
-                            publicacion_id=publicacion_id,
-                            tipo="imagen",
-                            ruta_archivo=image_path,
-                            url_original=image_url
-                        )
 
                 print(f"[OK] Guardada publicación nueva ID {publicacion_id}")
                 print(f"[OK] Código externo: {data['codigo_externo']}")
@@ -1590,7 +1641,8 @@ def main():
                 print(f"[OK] Coordenadas: {data['coordenadas']}")
                 print(f"[OK] Carpeta evidencias: evidencias/publicacion_{publicacion_id}")
 
-                time.sleep(2)
+                if REQUEST_PAUSE_SECONDS > 0:
+                    time.sleep(REQUEST_PAUSE_SECONDS)
 
             except Exception as error:
                 total_errores += 1
