@@ -330,7 +330,6 @@ export function PublicacionesManager({
                 <Detail label="Pisos" value={detail.pisos ?? "—"} />
                 <Detail label="Antigüedad" value={detail.antiguedad || "—"} />
                 <Detail label="Ciudad" value={detail.ciudad || "—"} />
-                <Detail label="Comuna" value={detail.comuna || "—"} />
                 <Detail label="Barrio" value={barrioLabel(detail.barrio)} />
                 <Detail label="PH" value={detail.ph || "—"} />
               </div>
