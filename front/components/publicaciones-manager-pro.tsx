@@ -45,6 +45,7 @@ import { toast } from "sonner"
 
 type Row = Record<string, any> & { id: number }
 type ImageItem = { name: string; src: string }
+type HtmlItem = { name: string; src: string }
 
 function barrioLabel(value?: string | null) {
   return value?.trim() || "Sin barrio"
@@ -69,7 +70,9 @@ export function PublicacionesManagerPro({
   const [editing, setEditing] = useState<Row | null>(null)
   const [detail, setDetail] = useState<Row | null>(null)
   const [detailImages, setDetailImages] = useState<ImageItem[]>([])
+  const [detailHtmlFiles, setDetailHtmlFiles] = useState<HtmlItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
+  const [htmlLoading, setHtmlLoading] = useState(false)
   const [notaDraft, setNotaDraft] = useState("")
   const [notaSaving, setNotaSaving] = useState(false)
   const [toDelete, setToDelete] = useState<Row | null>(null)
@@ -79,7 +82,9 @@ export function PublicacionesManagerPro({
   useEffect(() => {
     if (!detail) {
       setDetailImages([])
+      setDetailHtmlFiles([])
       setImagesLoading(false)
+      setHtmlLoading(false)
       setNotaDraft("")
       return
     }
@@ -88,18 +93,34 @@ export function PublicacionesManagerPro({
     const controller = new AbortController()
     setNotaDraft(currentDetail.notas ?? "")
     setImagesLoading(true)
+    setHtmlLoading(true)
 
-    fetch(`/api/publicaciones/${currentDetail.id}/imagenes`, { signal: controller.signal })
-      .then((response) => (response.ok ? response.json() : { images: [] }))
-      .then((data: { images?: ImageItem[] }) => setDetailImages(Array.isArray(data.images) ? data.images : []))
-      .catch((error) => {
+    async function loadEvidence() {
+      try {
+        const [imagesResponse, htmlResponse] = await Promise.all([
+          fetch(`/api/publicaciones/${currentDetail.id}/imagenes`, { signal: controller.signal }),
+          fetch(`/api/publicaciones/${currentDetail.id}/html`, { signal: controller.signal }),
+        ])
+
+        const imagesData = imagesResponse.ok ? ((await imagesResponse.json()) as { images?: ImageItem[] }) : { images: [] }
+        const htmlData = htmlResponse.ok ? ((await htmlResponse.json()) as { html?: HtmlItem[] }) : { html: [] }
+
+        setDetailImages(Array.isArray(imagesData.images) ? imagesData.images : [])
+        setDetailHtmlFiles(Array.isArray(htmlData.html) ? htmlData.html : [])
+      } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setDetailImages([])
+          setDetailHtmlFiles([])
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setImagesLoading(false)
-      })
+      } finally {
+        if (!controller.signal.aborted) {
+          setImagesLoading(false)
+          setHtmlLoading(false)
+        }
+      }
+    }
+
+    void loadEvidence()
 
     return () => controller.abort()
   }, [detail])
@@ -142,6 +163,13 @@ export function PublicacionesManagerPro({
     } finally {
       setNotaSaving(false)
     }
+  }
+
+  function openHtmlFile() {
+    const htmlFile = detailHtmlFiles[0]
+    if (!htmlFile) return
+
+    window.open(htmlFile.src, "_blank", "noopener,noreferrer")
   }
 
   return (
@@ -361,6 +389,36 @@ export function PublicacionesManagerPro({
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">No hay imagenes guardadas para esta publicacion.</p>
+                )}
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-muted-foreground">HTML capturado</p>
+                  {detailHtmlFiles.length > 0 && (
+                    <Button type="button" variant="outline" size="sm" onClick={openHtmlFile}>
+                      Abrir HTML
+                    </Button>
+                  )}
+                </div>
+                {htmlLoading ? (
+                  <p className="text-sm text-muted-foreground">Cargando HTML...</p>
+                ) : detailHtmlFiles.length > 0 ? (
+                  <div className="space-y-1 text-sm">
+                    {detailHtmlFiles.map((file) => (
+                      <a
+                        key={file.src}
+                        href={file.src}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block break-all text-primary hover:underline"
+                      >
+                        {file.name}
+                      </a>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No hay HTML guardado para esta publicacion.</p>
                 )}
               </div>
 
