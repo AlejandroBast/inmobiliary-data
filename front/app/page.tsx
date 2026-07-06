@@ -2,13 +2,15 @@ import {
   getBarrios,
   getFuentes,
   getPublicaciones,
-  getPublicacionesTotal,
   type PublicacionFilters,
 } from "@/app/actions/publicaciones"
-import { PublicacionesManager } from "@/components/publicaciones-manager"
-import { PublicacionesFiltros } from "@/components/publicaciones-filtros"
-import { PublicacionesStats } from "@/components/publicaciones-stats"
-import { Building2 } from "lucide-react"
+import { AppShell } from "@/components/app-shell"
+import { PublicacionesDataLayout } from "@/components/publicaciones-data-layout"
+import { PublicacionesManagerPro } from "@/components/publicaciones-manager-pro"
+import { PublicacionesFiltrosPro } from "@/components/publicaciones-filtros-pro"
+import { buttonVariants } from "@/components/ui/button"
+import { Building2, LayoutDashboard } from "lucide-react"
+import Link from "next/link"
 
 export const dynamic = "force-dynamic"
 
@@ -22,6 +24,25 @@ function firstValue(value: string | string[] | undefined) {
 
 function hasActiveFilters(filters: PublicacionFilters) {
   return Object.values(filters).some((value) => String(value ?? "").trim() !== "")
+}
+
+function activeFilterCount(filters: PublicacionFilters) {
+  return Object.values(filters).filter((value) => String(value ?? "").trim() !== "").length
+}
+
+function buildSearchString(params: Record<string, string | string[] | undefined>) {
+  const search = new URLSearchParams()
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((item) => item && search.append(key, item))
+      return
+    }
+
+    if (value) search.set(key, value)
+  })
+
+  return search.toString()
 }
 
 export default async function Page({
@@ -44,64 +65,60 @@ export default async function Page({
     parqueadero: firstValue(params.parqueadero),
   }
 
-  const [publicaciones, fuentes, barriosData, totalPublicaciones] = await Promise.all([
+  const [publicaciones, fuentes, barriosData] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
-    getPublicacionesTotal(),
   ])
 
   const filtrosActivos = hasActiveFilters(filtros)
+  const totalFiltrosActivos = activeFilterCount(filtros)
+  const dashboardSearch = buildSearchString(params)
+  const dashboardHref = dashboardSearch ? `/dashboard?${dashboardSearch}` : "/dashboard"
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <header className="mb-8 flex items-center gap-3">
-        <div className="flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-          <Building2 className="size-6" />
-        </div>
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-balance">
-            Publicaciones inmobiliarias
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Gestiona el inventario de inmuebles capturados: crear, ver, editar y eliminar.
-          </p>
-        </div>
-      </header>
-
-      <div className="mb-6">
-        <PublicacionesFiltros
-          fuentes={fuentes}
-          barrios={barriosData.barrios}
-          hasSinBarrio={barriosData.hasSinBarrio}
-          initialValues={{
-            id: filtros.id ?? undefined,
-            tipoInmueble: filtros.tipoInmueble ?? undefined,
-            fuenteId: filtros.fuenteId ?? undefined,
-            fecha: filtros.fecha ?? undefined,
-            habitaciones: filtros.habitaciones ?? undefined,
-            banios: filtros.banios ?? undefined,
-            barrio: filtros.barrio ?? undefined,
-            precioMin: filtros.precioMin ?? undefined,
-            precioMax: filtros.precioMax ?? undefined,
-            parqueadero: filtros.parqueadero ?? undefined,
-          }}
-        />
-      </div>
-
-      <div className="mb-6">
-        <PublicacionesStats
-          publicaciones={publicaciones}
-          totalPublicaciones={totalPublicaciones}
-          hasActiveFilters={filtrosActivos}
-        />
-      </div>
-
-      <PublicacionesManager
-        publicaciones={publicaciones}
-        fuentes={fuentes}
-        hasActiveFilters={filtrosActivos}
-      />
-    </main>
+    <AppShell
+      active="publicaciones"
+      title="Publicaciones inmobiliarias"
+      subtitle="Gestiona el inventario capturado y revisa comparables por precio, barrio y fuente."
+      icon={<Building2 className="size-5" />}
+      actions={
+        <Link href={dashboardHref} className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10" })}>
+          <LayoutDashboard className="size-4" />
+          Ver dashboard
+        </Link>
+      }
+    >
+      <PublicacionesDataLayout
+        activeFilterCount={totalFiltrosActivos}
+        filterPanel={
+          <PublicacionesFiltrosPro
+            fuentes={fuentes}
+            barrios={barriosData.barrios}
+            hasSinBarrio={barriosData.hasSinBarrio}
+            initialValues={{
+              id: filtros.id ?? undefined,
+              tipoInmueble: filtros.tipoInmueble ?? undefined,
+              fuenteId: filtros.fuenteId ?? undefined,
+              fecha: filtros.fecha ?? undefined,
+              habitaciones: filtros.habitaciones ?? undefined,
+              banios: filtros.banios ?? undefined,
+              barrio: filtros.barrio ?? undefined,
+              precioMin: filtros.precioMin ?? undefined,
+              precioMax: filtros.precioMax ?? undefined,
+              parqueadero: filtros.parqueadero ?? undefined,
+            }}
+          />
+        }
+      >
+        <section id="publicaciones" className="min-w-0">
+          <PublicacionesManagerPro
+            publicaciones={publicaciones}
+            fuentes={fuentes}
+            hasActiveFilters={filtrosActivos}
+          />
+        </section>
+      </PublicacionesDataLayout>
+    </AppShell>
   )
 }
