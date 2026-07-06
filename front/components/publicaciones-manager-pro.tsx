@@ -36,7 +36,9 @@ import {
   ExternalLink,
   Eye,
   ImageIcon,
+  MapPin,
   MessageSquareText,
+  Navigation,
   Pencil,
   Plus,
   Trash2,
@@ -55,6 +57,28 @@ function shortNote(value?: string | null) {
   const clean = value?.trim()
   if (!clean) return "Sin nota"
   return clean.length > 72 ? `${clean.slice(0, 72)}...` : clean
+}
+
+function coordinatesText(publicacion: Row) {
+  const coordenadas = String(publicacion.coordenadas ?? "").trim()
+  if (coordenadas) return coordenadas
+
+  const latitud = String(publicacion.latitud ?? "").trim()
+  const longitud = String(publicacion.longitud ?? "").trim()
+
+  return latitud && longitud ? `${latitud}, ${longitud}` : ""
+}
+
+function coordinatesMapUrl(publicacion: Row) {
+  const latitud = String(publicacion.latitud ?? "").trim()
+  const longitud = String(publicacion.longitud ?? "").trim()
+  const coordenadas = coordinatesText(publicacion)
+
+  if (latitud && longitud) {
+    return `https://www.google.com/maps?q=${encodeURIComponent(`${latitud},${longitud}`)}`
+  }
+
+  return coordenadas ? `https://www.google.com/maps?q=${encodeURIComponent(coordenadas)}` : null
 }
 
 export function PublicacionesManagerPro({
@@ -257,6 +281,12 @@ export function PublicacionesManagerPro({
                       <div className="text-xs text-muted-foreground">
                         {p.ciudad || "Sin ubicacion"}
                       </div>
+                      {coordinatesText(p) && (
+                        <Badge variant="outline" className="mt-1 gap-1 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
+                          <MapPin className="size-3" />
+                          GPS
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       {p.fuenteNombre ? <Badge variant="secondary">{p.fuenteNombre}</Badge> : "-"}
@@ -353,6 +383,38 @@ export function PublicacionesManagerPro({
               {detail.descripcion && (
                 <TextBlock label="Descripcion" value={detail.descripcion} />
               )}
+
+              <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-400/20 dark:bg-emerald-400/10">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="size-4 text-emerald-700 dark:text-emerald-300" />
+                    <div>
+                      <p className="text-sm font-medium">Coordenadas</p>
+                      <p className="text-xs text-muted-foreground">{coordinatesText(detail) || "Sin coordenadas capturadas"}</p>
+                    </div>
+                  </div>
+                  {coordinatesMapUrl(detail) && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0 gap-2"
+                      onClick={() => {
+                        const url = coordinatesMapUrl(detail)
+                        if (url) window.open(url, "_blank", "noopener,noreferrer")
+                      }}
+                    >
+                      <Navigation className="size-4" />
+                      Abrir mapa
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+                  <Detail label="Latitud" value={detail.latitud || "-"} />
+                  <Detail label="Longitud" value={detail.longitud || "-"} />
+                  <Detail label="Direccion" value={detail.direccion || "-"} />
+                </div>
+              </div>
 
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
