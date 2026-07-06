@@ -19,15 +19,25 @@ function loadRootEnv() {
 
 loadRootEnv()
 
-const pool = mysql.createPool({
+const globalForMysql = globalThis as typeof globalThis & {
+	__inmobiliaryMysqlPool?: mysql.Pool
+}
+
+const pool =
+	globalForMysql.__inmobiliaryMysqlPool ??
+	mysql.createPool({
 	host: process.env.DB_HOST ?? "localhost",
 	port: Number(process.env.DB_PORT ?? "3306"),
 	user: process.env.DB_USER ?? "root",
 	password: process.env.DB_PASSWORD ?? "",
 	database: process.env.DB_NAME ?? "db_inmobiliary_data",
 	waitForConnections: true,
-	connectionLimit: 10,
+	connectionLimit: 4,
 })
+
+if (process.env.NODE_ENV !== "production") {
+	globalForMysql.__inmobiliaryMysqlPool = pool
+}
 
 export { pool }
 export const db = drizzle(pool, { schema, mode: "default" })
