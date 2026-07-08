@@ -62,6 +62,9 @@ export default async function Page({
     barrio: firstValue(params.barrio) || firstValue(params.ubicacion),
     precioMin: firstValue(params.precioMin),
     precioMax: firstValue(params.precioMax),
+    m2Min: firstValue(params.m2Min),
+    m2Max: firstValue(params.m2Max),
+    phTipo: firstValue(params.phTipo),
     parqueadero: firstValue(params.parqueadero),
   }
 
@@ -106,6 +109,9 @@ export default async function Page({
               barrio: filtros.barrio ?? undefined,
               precioMin: filtros.precioMin ?? undefined,
               precioMax: filtros.precioMax ?? undefined,
+              m2Min: filtros.m2Min ?? undefined,
+              m2Max: filtros.m2Max ?? undefined,
+              phTipo: filtros.phTipo ?? undefined,
               parqueadero: filtros.parqueadero ?? undefined,
             }}
           />
