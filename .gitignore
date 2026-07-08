@@ -4,5 +4,6 @@ venv/
 evidencias/
 .evidencias/
 .env
+logs/
 
 
