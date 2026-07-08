@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select"
 import { formatCOP } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
-import { CalendarDays, Eraser, Filter, Home, MapPinned, Search, Tags, type LucideIcon } from "lucide-react"
+import { CalendarDays, Eraser, Filter, Home, MapPinned, Ruler, Search, Tags, type LucideIcon } from "lucide-react"
 
 type FiltrosValue = {
   id: string
@@ -29,6 +29,9 @@ type FiltrosValue = {
   barrio: string
   precioMin: string
   precioMax: string
+  m2Min: string
+  m2Max: string
+  phTipo: string
 }
 
 type PricePreset = {
@@ -48,6 +51,9 @@ const initialFilters: FiltrosValue = {
   barrio: "",
   precioMin: "",
   precioMax: "",
+  m2Min: "",
+  m2Max: "",
+  phTipo: "",
 }
 
 const pricePresets: PricePreset[] = [
@@ -252,6 +258,18 @@ export function PublicacionesFiltrosPro({
               </SelectContent>
             </Select>
           </Field>
+          <Field label="Propiedad" htmlFor="filtro-ph-tipo">
+            <Select value={values.phTipo} onValueChange={(value) => setField("phTipo", value ?? "")}>
+              <SelectTrigger id="filtro-ph-tipo">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas</SelectItem>
+                <SelectItem value="ph">Con PH</SelectItem>
+                <SelectItem value="normal">Normales</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
         </FilterGroup>
 
         <FilterGroup icon={Home} title="2. Caracteristicas del inmueble">
@@ -330,7 +348,40 @@ export function PublicacionesFiltrosPro({
           </Field>
         </FilterGroup>
 
-        <FilterGroup icon={Tags} title="4. Rango de precio">
+        <FilterGroup icon={Ruler} title="4. Metros cuadrados">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Area minima" htmlFor="filtro-m2-min">
+              <Input
+                id="filtro-m2-min"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                placeholder="Ej. 60"
+                value={values.m2Min}
+                onChange={(event) => setField("m2Min", event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {values.m2Min ? `Desde ${values.m2Min} m2` : "Sin minimo"}
+              </p>
+            </Field>
+            <Field label="Area maxima" htmlFor="filtro-m2-max">
+              <Input
+                id="filtro-m2-max"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                placeholder="Ej. 120"
+                value={values.m2Max}
+                onChange={(event) => setField("m2Max", event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {values.m2Max ? `Hasta ${values.m2Max} m2` : "Sin maximo"}
+              </p>
+            </Field>
+          </div>
+        </FilterGroup>
+
+        <FilterGroup icon={Tags} title="5. Rango de precio">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Precio minimo" htmlFor="filtro-precio-min">
               <Input
