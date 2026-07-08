@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from scraper_audit import ScraperAudit
+
 
 # ==========================================================
 # CONFIGURACIÓN GENERAL
@@ -33,7 +35,8 @@ DB_CONFIG = {
 }
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
-MAX_PAGES = int(os.getenv("MAX_PAGES", "3"))
+# 0 = recorrer todas las paginas detectadas.
+MAX_PAGES = int(os.getenv("MAX_PAGES", "0"))
 
 GALLERY_VISIBLE_WAIT_MS = int(os.getenv("GALLERY_VISIBLE_WAIT_MS", "400"))
 GALLERY_OPEN_WAIT_MS = int(os.getenv("GALLERY_OPEN_WAIT_MS", "600"))
@@ -224,6 +227,29 @@ def extract_total_results(text):
 
     if match:
         return only_digits(match.group(1))
+
+    return None
+
+
+def extract_result_window(text):
+    if not text:
+        return None
+
+    match = re.search(
+        r"([\d\.,]+)\s*[-\u2013]\s*([\d\.,]+)\s+de\s+([\d\.,]+)\s+resultados",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    start = only_digits(match.group(1))
+    end = only_digits(match.group(2))
+    total = only_digits(match.group(3))
+
+    if start and end and total and end >= start:
+        return start, end, total
 
     return None
 
@@ -1320,9 +1346,16 @@ def click_next_page(page):
 
 
 def collect_publication_links(page):
+    audit = ScraperAudit("Ciencuadras", SEARCH_URL)
     all_links = set()
 
-    page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception as error:
+        reason = f"No se pudo abrir la primera pagina de resultados: {error}"
+        print(f"[ERROR] {reason}")
+        audit.record_page(1, url=SEARCH_URL, status="error", reason=reason)
+        return [], audit
 
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
@@ -1333,15 +1366,43 @@ def collect_publication_links(page):
 
     body_text = page.locator("body").inner_text(timeout=15000)
     total_results = extract_total_results(body_text)
+    result_window = extract_result_window(body_text)
 
-    if total_results:
-        total_pages = math.ceil(total_results / 20)
+    if result_window:
+        start, end, window_total = result_window
+        total_results = total_results or window_total
+        page_size = max(end - start + 1, 1)
     else:
-        total_pages = MAX_PAGES
+        first_page_links_preview = get_current_page_links(page)
+        page_size = len(first_page_links_preview) or None
 
-    total_pages = min(total_pages, MAX_PAGES)
+    if total_results and page_size:
+        detected_pages = math.ceil(total_results / page_size)
+    else:
+        detected_pages = MAX_PAGES if MAX_PAGES > 0 else 1
+
+    if MAX_PAGES > 0:
+        total_pages = min(detected_pages, MAX_PAGES)
+    else:
+        total_pages = detected_pages
+
+    limit_reason = None
+    if MAX_PAGES > 0 and detected_pages > total_pages:
+        limit_reason = (
+            f"Se revisaron {total_pages} de {detected_pages} pagina(s) porque "
+            f"MAX_PAGES={MAX_PAGES} limito el recorrido."
+        )
+
+    audit.set_listing_summary(
+        total_reported=total_results,
+        pages_expected=detected_pages,
+        pages_planned=total_pages,
+        page_size=page_size,
+        limit_reason=limit_reason,
+    )
 
     print(f"[INFO] Total resultados detectados: {total_results}")
+    print(f"[INFO] Resultados por pagina detectados: {page_size}")
     print(f"[INFO] Total páginas a revisar: {total_pages}")
 
     for current_page in range(1, total_pages + 1):
@@ -1358,6 +1419,7 @@ def collect_publication_links(page):
                 print(f"[WARN] No se pudo avanzar a la página {current_page}")
 
                 debug_path = EVIDENCE_DIR / f"debug_paginacion_pagina_{current_page}.png"
+                reason = "No funciono el click directo ni el boton siguiente."
 
                 try:
                     page.screenshot(path=str(debug_path), full_page=True)
@@ -1365,6 +1427,14 @@ def collect_publication_links(page):
                 except Exception:
                     pass
 
+                audit.record_page(
+                    current_page,
+                    links_count=0,
+                    new_links_count=0,
+                    duplicate_links_count=0,
+                    status="pagination_error",
+                    reason=reason,
+                )
                 break
 
             try:
@@ -1379,13 +1449,28 @@ def collect_publication_links(page):
 
         links = get_current_page_links(page)
 
+        new_links = 0
+        duplicate_links = 0
         for link in links:
-            all_links.add(link)
+            if link in all_links:
+                duplicate_links += 1
+            else:
+                all_links.add(link)
+                new_links += 1
+
+        audit.record_page(
+            current_page,
+            links_count=len(links),
+            new_links_count=new_links,
+            duplicate_links_count=duplicate_links,
+        )
 
         print(f"[INFO] Links encontrados en esta página: {len(links)}")
+        print(f"[INFO] Links nuevos en esta página: {new_links}")
+        print(f"[INFO] Links repetidos en esta página: {duplicate_links}")
         print(f"[INFO] Links acumulados: {len(all_links)}")
 
-    return list(all_links)
+    return list(all_links), audit
 
 
 # ==========================================================
@@ -1546,7 +1631,7 @@ def main():
 
         page = context.new_page()
 
-        publication_links = collect_publication_links(page)
+        publication_links, audit = collect_publication_links(page)
 
         print(f"[INFO] Total publicaciones encontradas: {len(publication_links)}")
 
@@ -1566,6 +1651,7 @@ def main():
 
                 if not data:
                     total_errores += 1
+                    audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
                 try:
@@ -1646,6 +1732,7 @@ def main():
 
             except Exception as error:
                 total_errores += 1
+                audit.record_error(link, error)
                 print(f"[ERROR] Falló publicación {link}: {error}")
                 continue
 
@@ -1657,6 +1744,13 @@ def main():
     print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
     print(f"[RESUMEN] Saltadas porque ya existían: {total_saltadas}")
     print(f"[RESUMEN] Errores u omitidas: {total_errores}")
+    audit.set_processing_counts(
+        nuevas=total_nuevas,
+        saltadas=total_saltadas,
+        errores_u_omitidas=total_errores,
+    )
+    audit.print_summary(len(publication_links))
+    audit.save(len(publication_links))
 
 
 if __name__ == "__main__":
