@@ -23,19 +23,27 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { deletePublicacion, updateNotaPublicacion } from "@/app/actions/publicaciones"
+import {
+  deletePublicacion,
+  updateNotaPublicacion,
+  validatePublicacionLinks,
+  type PublicacionLinkStatus,
+} from "@/app/actions/publicaciones"
 import { PublicacionForm } from "@/components/publicacion-form"
 import { formatCOP, formatDate, formatNumber } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
 import {
+  AlertTriangle,
   Bath,
   BedDouble,
   Building2,
   CalendarClock,
   Car,
+  CheckCircle2,
   ExternalLink,
   Eye,
   ImageIcon,
+  Loader2,
   MapPin,
   MessageSquareText,
   Navigation,
@@ -51,6 +59,10 @@ type HtmlItem = { name: string; src: string }
 
 function barrioLabel(value?: string | null) {
   return value?.trim() || "Sin barrio"
+}
+
+function phLabel(value?: string | null) {
+  return value?.trim() || "Sin edificio/conjunto"
 }
 
 function shortNote(value?: string | null) {
@@ -81,6 +93,14 @@ function coordinatesMapUrl(publicacion: Row) {
   return coordenadas ? `https://www.google.com/maps?q=${encodeURIComponent(coordenadas)}` : null
 }
 
+function rowLinks(publicacion: Row) {
+  return {
+    id: publicacion.id,
+    linkOrigen: publicacion.linkOrigen ?? null,
+    linksAdicionales: publicacion.linksAdicionales ?? null,
+  }
+}
+
 export function PublicacionesManagerPro({
   publicaciones,
   fuentes,
@@ -95,6 +115,8 @@ export function PublicacionesManagerPro({
   const [detail, setDetail] = useState<Row | null>(null)
   const [detailImages, setDetailImages] = useState<ImageItem[]>([])
   const [detailHtmlFiles, setDetailHtmlFiles] = useState<HtmlItem[]>([])
+  const [linkStatuses, setLinkStatuses] = useState<Record<number, PublicacionLinkStatus>>({})
+  const [linksLoading, setLinksLoading] = useState(false)
   const [imagesLoading, setImagesLoading] = useState(false)
   const [htmlLoading, setHtmlLoading] = useState(false)
   const [notaDraft, setNotaDraft] = useState("")
@@ -102,6 +124,36 @@ export function PublicacionesManagerPro({
   const [toDelete, setToDelete] = useState<Row | null>(null)
   const [isPending, startTransition] = useTransition()
   const router = useRouter()
+
+  useEffect(() => {
+    let active = true
+    const items = publicaciones.map(rowLinks)
+
+    if (items.length === 0) {
+      setLinkStatuses({})
+      setLinksLoading(false)
+      return
+    }
+
+    setLinksLoading(true)
+
+    validatePublicacionLinks(items)
+      .then((results) => {
+        if (!active) return
+        setLinkStatuses(Object.fromEntries(results.map((result) => [result.id, result])))
+      })
+      .catch(() => {
+        if (!active) return
+        setLinkStatuses({})
+      })
+      .finally(() => {
+        if (active) setLinksLoading(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [publicaciones])
 
   useEffect(() => {
     if (!detail) {
@@ -267,7 +319,11 @@ export function PublicacionesManagerPro({
                     key={p.id}
                     className={[
                       "cursor-pointer transition-colors hover:bg-emerald-50/70 dark:hover:bg-emerald-400/10",
-                      index % 2 === 0 ? "bg-background dark:bg-zinc-950/30" : "bg-slate-50/45 dark:bg-white/[0.025]",
+                      linkStatuses[p.id]?.ok === false
+                        ? "border-red-300 bg-red-50/80 hover:bg-red-100/80 dark:border-red-400/40 dark:bg-red-950/35 dark:hover:bg-red-950/50"
+                        : index % 2 === 0
+                          ? "bg-background dark:bg-zinc-950/30"
+                          : "bg-slate-50/45 dark:bg-white/[0.025]",
                     ].join(" ")}
                     onClick={() => setDetail(p)}
                   >
@@ -372,6 +428,7 @@ export function PublicacionesManagerPro({
                 <Detail label="Administracion" value={formatCOP(detail.administracion)} />
                 <Detail label="Barrio" value={barrioLabel(detail.barrio)} />
                 <Detail label="Ciudad" value={detail.ciudad || "-"} />
+                <Detail label="Edificio / conjunto" value={phLabel(detail.ph)} />
                 <Detail label="Habitaciones" value={detail.habitaciones ?? "-"} />
                 <Detail label="Banos" value={detail.banios ?? "-"} />
                 <Detail label="Parqueaderos" value={detail.parqueadero ?? "-"} />
@@ -485,10 +542,30 @@ export function PublicacionesManagerPro({
               </div>
 
               <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
-                <a href={detail.linkOrigen} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
-                  <ExternalLink className="size-4" />
-                  Ver origen
-                </a>
+                <div className="flex flex-wrap items-center gap-2">
+                  <a href={detail.linkOrigen} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                    <ExternalLink className="size-4" />
+                    Ver origen
+                  </a>
+                  {linksLoading && !linkStatuses[detail.id] && (
+                    <Badge variant="outline" className="gap-1 border-slate-200 text-slate-600 dark:border-white/10 dark:text-slate-300">
+                      <Loader2 className="size-3 animate-spin" />
+                      Validando link
+                    </Badge>
+                  )}
+                  {linkStatuses[detail.id]?.ok === true && (
+                    <Badge variant="outline" className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
+                      <CheckCircle2 className="size-3" />
+                      Link disponible
+                    </Badge>
+                  )}
+                  {linkStatuses[detail.id]?.ok === false && (
+                    <Badge variant="outline" className="gap-1 border-red-300 bg-red-50 text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-200">
+                      <AlertTriangle className="size-3" />
+                      Link con problema
+                    </Badge>
+                  )}
+                </div>
                 <Button variant="outline" onClick={() => { const selected = detail; setDetail(null); openEdit(selected) }}>
                   Editar
                 </Button>
