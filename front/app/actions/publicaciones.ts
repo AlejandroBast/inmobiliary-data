@@ -16,6 +16,9 @@ export type PublicacionFilters = {
   ubicacion?: string | null
   precioMin?: string | null
   precioMax?: string | null
+  m2Min?: string | null
+  m2Max?: string | null
+  phTipo?: string | null
   parqueadero?: string | null
 }
 
@@ -44,6 +47,27 @@ export type PublicacionInput = {
   parqueadero?: number | null
   administracion?: string | null
   notas?: string | null
+}
+
+export type PublicacionLinkValidationInput = {
+  id: number
+  linkOrigen?: string | null
+  linksAdicionales?: unknown
+}
+
+export type PublicacionLinkCheck = {
+  label: string
+  url: string
+  ok: boolean
+  status: number | null
+  error?: string
+}
+
+export type PublicacionLinkStatus = {
+  id: number
+  ok: boolean
+  checkedAt: string
+  links: PublicacionLinkCheck[]
 }
 
 function cleanFilter(value?: string | null) {
@@ -131,6 +155,18 @@ function parseMoneyFilter(value?: string | null) {
   return parsed > 0 && parsed < 100000 ? parsed * 1_000_000 : parsed
 }
 
+function parseAreaFilter(value?: string | null) {
+  const cleaned = cleanFilter(value)?.replace(",", ".").replace(/[^\d.]/g, "")
+  if (!cleaned) return null
+
+  const parsed = Number.parseFloat(cleaned)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function m2Sql() {
+  return sql<number>`CAST(NULLIF(REGEXP_REPLACE(REPLACE(${publicaciones.m2}, ',', '.'), ${"[^0-9.]"}, ${""}), '') AS DECIMAL(10,2))`
+}
+
 function isValidDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(new Date(`${value}T00:00:00`).getTime())
 }
@@ -202,6 +238,23 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     conditions.push(sql`${publicaciones.precio} <= ${precioMax}`)
   }
 
+  const m2Min = parseAreaFilter(filters.m2Min)
+  if (m2Min) {
+    conditions.push(sql`${m2Sql()} >= ${m2Min}`)
+  }
+
+  const m2Max = parseAreaFilter(filters.m2Max)
+  if (m2Max) {
+    conditions.push(sql`${m2Sql()} <= ${m2Max}`)
+  }
+
+  const phTipo = cleanFilter(filters.phTipo)
+  if (phTipo === "ph") {
+    conditions.push(sql`${publicaciones.ph} IS NOT NULL AND TRIM(${publicaciones.ph}) <> ''`)
+  } else if (phTipo === "normal") {
+    conditions.push(sql`(${publicaciones.ph} IS NULL OR TRIM(${publicaciones.ph}) = '')`)
+  }
+
   const barrio = cleanFilter(filters.barrio) ?? cleanFilter(filters.ubicacion)
   if (barrio === "__sin_barrio") {
     conditions.push(sql`(${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = '')`)
@@ -250,6 +303,90 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     .orderBy(desc(publicaciones.fechaCaptura))
 
   return query
+}
+
+function normalizeStoredLinks(input: PublicacionLinkValidationInput) {
+  const links: Array<{ label: string; url: string }> = []
+  const origen = cleanFilter(input.linkOrigen)
+
+  if (origen) {
+    links.push({ label: "Origen", url: origen })
+  }
+
+  const adicionales = input.linksAdicionales
+  const rawLinks = Array.isArray(adicionales)
+    ? adicionales
+    : typeof adicionales === "string"
+      ? adicionales.split(/\r?\n/)
+      : []
+
+  rawLinks.forEach((item, index) => {
+    const url = typeof item === "string" ? cleanFilter(item) : null
+    if (url) {
+      links.push({ label: `Adicional ${index + 1}`, url })
+    }
+  })
+
+  return links
+}
+
+async function validateLink(label: string, url: string): Promise<PublicacionLinkCheck> {
+  if (!/^https?:\/\//i.test(url)) {
+    return { label, url, ok: false, status: null, error: "URL invalida" }
+  }
+
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 8000)
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+    })
+
+    return {
+      label,
+      url,
+      ok: response.status >= 200 && response.status < 400,
+      status: response.status,
+      error: response.status >= 200 && response.status < 400 ? undefined : `HTTP ${response.status}`,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo validar"
+    return {
+      label,
+      url,
+      ok: false,
+      status: null,
+      error: message.includes("aborted") ? "Tiempo de espera agotado" : message,
+    }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function validatePublicacionLinks(
+  items: PublicacionLinkValidationInput[],
+): Promise<PublicacionLinkStatus[]> {
+  return Promise.all(
+    items.map(async (item) => {
+      const links = normalizeStoredLinks(item)
+      const checks = await Promise.all(links.map((link) => validateLink(link.label, link.url)))
+
+      return {
+        id: item.id,
+        ok: checks.length > 0 && checks.every((check) => check.ok),
+        checkedAt: new Date().toISOString(),
+        links: checks,
+      }
+    }),
+  )
 }
 
 export async function getPublicacionesTotal() {
