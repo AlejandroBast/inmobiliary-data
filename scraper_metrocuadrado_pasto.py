@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from scraper_audit import ScraperAudit
+
 
 load_dotenv()
 
@@ -34,6 +36,7 @@ HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 PUBLICATION_URL = os.getenv("PUBLICATION_URL")
 MAX_PUBLICATIONS = int(os.getenv("MAX_PUBLICATIONS", "0"))
 LIST_SCROLLS = int(os.getenv("METROCUADRADO_LIST_SCROLLS", "8"))
+SCROLL_STALL_LIMIT = int(os.getenv("METROCUADRADO_STALL_SCROLLS", "3"))
 SEARCH_LOAD_WAIT_MS = int(os.getenv("SEARCH_LOAD_WAIT_MS", "3000"))
 DETAIL_LOAD_WAIT_MS = int(os.getenv("DETAIL_LOAD_WAIT_MS", "1800"))
 SCROLL_WAIT_MS = int(os.getenv("SCROLL_WAIT_MS", "1200"))
@@ -76,6 +79,47 @@ def only_digits(value):
 
     digits = re.sub(r"[^\d]", "", str(value))
     return int(digits) if digits else None
+
+
+def extract_total_results(text):
+    if not text:
+        return None
+
+    patterns = [
+        r"([\d\.,]+)\s*[-\u2013]\s*([\d\.,]+)\s+de\s+([\d\.,]+)\s+resultados",
+        r"de\s+([\d\.,]+)\s+resultados",
+        r"([\d\.,]+)\s+resultados",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return only_digits(match.group(match.lastindex or 1))
+
+    return None
+
+
+def extract_result_window(text):
+    if not text:
+        return None
+
+    match = re.search(
+        r"([\d\.,]+)\s*[-\u2013]\s*([\d\.,]+)\s+de\s+([\d\.,]+)\s+resultados",
+        text,
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return None
+
+    start = only_digits(match.group(1))
+    end = only_digits(match.group(2))
+    total = only_digits(match.group(3))
+
+    if start and end and total and end >= start:
+        return start, end, total
+
+    return None
 
 
 def parse_decimal(value):
@@ -471,11 +515,25 @@ def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
 
 
 def collect_publication_links(page):
+    audit = ScraperAudit("Metrocuadrado", PUBLICATION_URL or SEARCH_URL)
     if PUBLICATION_URL:
-        return [PUBLICATION_URL]
+        audit.set_listing_summary(
+            total_reported=1,
+            pages_expected=1,
+            pages_planned=1,
+            page_size=1,
+        )
+        audit.record_page("link_directo", url=PUBLICATION_URL, links_count=1, new_links_count=1)
+        return [PUBLICATION_URL], audit
 
     print(f"[INFO] Abriendo listado: {SEARCH_URL}")
-    page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+    except Exception as error:
+        reason = f"No se pudo abrir el listado: {error}"
+        print(f"[ERROR] {reason}")
+        audit.record_page(1, url=SEARCH_URL, status="error", reason=reason)
+        return [], audit
 
     try:
         page.wait_for_load_state("networkidle", timeout=20000)
@@ -483,7 +541,32 @@ def collect_publication_links(page):
         pass
 
     page.wait_for_timeout(SEARCH_LOAD_WAIT_MS)
+    try:
+        body_text = page.locator("body").inner_text(timeout=15000)
+    except Exception:
+        body_text = ""
+
+    total_results = extract_total_results(body_text)
+    result_window = extract_result_window(body_text)
+    page_size = None
+    if result_window:
+        start, end, window_total = result_window
+        total_results = total_results or window_total
+        page_size = max(end - start + 1, 1)
+
+    audit.set_listing_summary(
+        total_reported=total_results,
+        pages_expected=None,
+        pages_planned=LIST_SCROLLS,
+        page_size=page_size,
+    )
+    print(f"[INFO] Total resultados detectados: {total_results}")
+    print(f"[INFO] Resultados por pagina detectados: {page_size}")
+    print(f"[INFO] Scrolls maximos de seguridad: {LIST_SCROLLS}")
+    print(f"[INFO] Scrolls sin links nuevos para detener: {SCROLL_STALL_LIMIT}")
+
     links = []
+    stalled_scrolls = 0
 
     for scroll_index in range(LIST_SCROLLS):
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -511,16 +594,58 @@ def collect_publication_links(page):
             """,
         )
 
+        new_links = 0
+        duplicate_links = 0
         for link in current_links:
             if link not in links:
                 links.append(link)
+                new_links += 1
+            else:
+                duplicate_links += 1
 
-        print(f"[INFO] Scroll {scroll_index + 1}/{LIST_SCROLLS}: {len(links)} links acumulados")
+        audit.record_scroll(
+            scroll_index + 1,
+            links_count=len(current_links),
+            new_links_count=new_links,
+            duplicate_links_count=duplicate_links,
+        )
+
+        print(
+            f"[INFO] Scroll {scroll_index + 1}/{LIST_SCROLLS}: "
+            f"{len(current_links)} visibles, {new_links} nuevos, {duplicate_links} repetidos, "
+            f"{len(links)} acumulados"
+        )
+
+        if new_links == 0:
+            stalled_scrolls += 1
+        else:
+            stalled_scrolls = 0
+
+        if stalled_scrolls >= SCROLL_STALL_LIMIT:
+            message = (
+                f"Scroll detenido porque hubo {stalled_scrolls} scroll(s) seguidos "
+                "sin links nuevos."
+            )
+            print(f"[INFO] {message}")
+            audit.add_note(message)
+            break
+    else:
+        audit.add_note(
+            f"Se alcanzo METROCUADRADO_LIST_SCROLLS={LIST_SCROLLS}; si faltan anuncios, "
+            "ese limite de seguridad puede haber detenido el recorrido."
+        )
 
     if MAX_PUBLICATIONS > 0:
+        if len(links) > MAX_PUBLICATIONS:
+            audit.limit_reason = (
+                f"Se encontraron {len(links)} links, pero MAX_PUBLICATIONS={MAX_PUBLICATIONS} "
+                "recorto la lista procesada."
+            )
         links = links[:MAX_PUBLICATIONS]
 
-    return links
+    audit.pages_planned = len(audit.page_results)
+
+    return links, audit
 
 
 def extract_publication_data(page, url, fuente_id):
@@ -618,7 +743,7 @@ def main():
             ),
         )
         page = context.new_page()
-        publication_links = collect_publication_links(page)
+        publication_links, audit = collect_publication_links(page)
 
         print(f"[INFO] Total links Metrocuadrado: {len(publication_links)}")
 
@@ -630,6 +755,7 @@ def main():
 
                 if not data:
                     total_omitidas += 1
+                    audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
                 publicacion_existente_id = publicacion_ya_existe(
@@ -692,6 +818,7 @@ def main():
 
             except Exception as error:
                 total_errores += 1
+                audit.record_error(link, error)
                 print(f"[ERROR] Fallo publicacion {link}: {error}")
 
         browser.close()
@@ -703,6 +830,14 @@ def main():
     print(f"[RESUMEN] Saltadas porque ya existian: {total_saltadas}")
     print(f"[RESUMEN] Omitidas: {total_omitidas}")
     print(f"[RESUMEN] Errores: {total_errores}")
+    audit.set_processing_counts(
+        nuevas=total_nuevas,
+        saltadas=total_saltadas,
+        omitidas=total_omitidas,
+        errores=total_errores,
+    )
+    audit.print_summary(len(publication_links))
+    audit.save(len(publication_links))
 
 
 if __name__ == "__main__":
