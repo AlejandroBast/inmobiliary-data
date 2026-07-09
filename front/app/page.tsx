@@ -9,7 +9,7 @@ import { PublicacionesDataLayout } from "@/components/publicaciones-data-layout"
 import { PublicacionesManagerPro } from "@/components/publicaciones-manager-pro"
 import { PublicacionesFiltrosPro } from "@/components/publicaciones-filtros-pro"
 import { buttonVariants } from "@/components/ui/button"
-import { Building2, LayoutDashboard } from "lucide-react"
+import { Building2, Download, LayoutDashboard } from "lucide-react"
 import Link from "next/link"
 
 export const dynamic = "force-dynamic"
@@ -86,10 +86,16 @@ export default async function Page({
       subtitle="Gestiona el inventario capturado y revisa comparables por precio, barrio y fuente."
       icon={<Building2 className="size-5" />}
       actions={
-        <Link href={dashboardHref} className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10" })}>
-          <LayoutDashboard className="size-4" />
-          Ver dashboard
-        </Link>
+        <>
+          <a href="/api/export/database" className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5" })}>
+            <Download className="size-4" />
+            Exportar Excel
+          </a>
+          <Link href={dashboardHref} className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10" })}>
+            <LayoutDashboard className="size-4" />
+            Ver dashboard
+          </Link>
+        </>
       }
     >
       <PublicacionesDataLayout
