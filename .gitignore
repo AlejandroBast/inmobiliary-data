@@ -5,5 +5,10 @@ evidencias/
 .evidencias/
 .env
 logs/
+__pycache__
+.codex
+.agents
+
+
 
 
