@@ -9,7 +9,7 @@ import { AppShell } from "@/components/app-shell"
 import { PublicacionesDashboardStats } from "@/components/publicaciones-dashboard-stats"
 import { PublicacionesFiltrosPro } from "@/components/publicaciones-filtros-pro"
 import { buttonVariants } from "@/components/ui/button"
-import { ArrowLeft, LayoutDashboard } from "lucide-react"
+import { ArrowLeft, Download, LayoutDashboard } from "lucide-react"
 import Link from "next/link"
 
 export const dynamic = "force-dynamic"
@@ -77,10 +77,16 @@ export default async function DashboardPage({
       subtitle="Analiza publicaciones, precios, barrios, fuentes y calidad de datos."
       icon={<LayoutDashboard className="size-5" />}
       actions={
-        <Link href={publicacionesHref} className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10" })}>
-          <ArrowLeft className="size-4" />
-          Volver a datos
-        </Link>
+        <>
+          <a href="/api/export/database" className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-slate-200 text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/5" })}>
+            <Download className="size-4" />
+            Exportar Excel
+          </a>
+          <Link href={publicacionesHref} className={buttonVariants({ variant: "outline", size: "lg", className: "gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10" })}>
+            <ArrowLeft className="size-4" />
+            Volver a datos
+          </Link>
+        </>
       }
     >
       <div id="filtros" className="mb-6">
