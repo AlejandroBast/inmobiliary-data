@@ -74,7 +74,9 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
-HEADLESS = os.getenv("FACEBOOK_HEADLESS", "false").lower() in ("1", "true", "yes", "y")
+# Facebook usa su propia opcion y corre oculto por defecto. De esta forma un
+# HEADLESS=false global no abre una ventana de Chromium durante el scraping.
+HEADLESS = os.getenv("FACEBOOK_HEADLESS", "true").strip().lower() in ("1", "true", "yes", "y")
 DRY_RUN = os.getenv("FACEBOOK_DRY_RUN", "false").lower() in ("1", "true", "yes", "y")
 SEARCH_CITY = os.getenv("FACEBOOK_SEARCH_CITY", "pasto")
 SEARCH_CATEGORY = os.getenv("FACEBOOK_SEARCH_CATEGORY", "homesales")

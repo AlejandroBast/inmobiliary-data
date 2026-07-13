@@ -256,6 +256,13 @@ def extract_title_parts(title):
 
     return tipo_inmueble, barrio
 
+def is_pasto_title(title):
+    """Confirma que el encabezado principal ubique el inmueble en Pasto."""
+    normalized = normalize_label(title)
+    if not normalized:
+        return False
+    return bool(re.search(r"(?:,\s*|\ben\s+)pasto\b", normalized, re.IGNORECASE))
+
 def extract_total_results(text):
     if not text:
         return None
@@ -1049,7 +1056,8 @@ def get_current_page_links(page):
 
                         return url.hostname.includes('fincaraiz.com.co')
                             && /\/\d{6,}$/.test(path)
-                            && path.includes('en-venta');
+                            && path.includes('en-venta')
+                            && path.includes('pasto');
                     } catch (error) {
                         return false;
                     }
@@ -1211,6 +1219,10 @@ def extract_publication_data(page, url, fuente_id):
         title = clean_text(page.locator("h1").first.inner_text(timeout=5000))
     except Exception:
         title = None
+
+    if not is_pasto_title(title):
+        print(f"[SKIP] Publicacion fuera de Pasto segun titulo principal: {title or url}")
+        return None, html, "fuera_de_pasto"
 
     codigo_externo = extract_codigo(text, url=url)
     precio = extract_precio(text)

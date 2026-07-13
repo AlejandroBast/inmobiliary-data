@@ -47,3 +47,13 @@ def test_extracts_las_lunas_from_bold_title():
 
     assert barrio == "Las lunas et. ii"
     assert direccion == "Las lunas et. ii, Pasto, Nariño"
+
+
+def test_rejects_titles_from_other_cities():
+    assert fincaraiz.is_pasto_title("Apartamento en Venta en La aurora, Pasto")
+    assert fincaraiz.is_pasto_title("Casa campestre en Venta en Pasto")
+    assert not fincaraiz.is_pasto_title(
+        "BRASSIKA CLUB LIVING, Apartamentos en Venta en Santa ana, Palmira"
+    )
+    assert not fincaraiz.is_pasto_title("Apartamentos en Venta en Bello")
+    assert not fincaraiz.is_pasto_title("Apartamentos en Venta en Apartadó")
