@@ -427,25 +427,31 @@ def extract_structured_location(html):
     address = first_json_value(data, ["address"])
     return extract_barrio_from_address(address), address
 
-def extract_location(lines, title=None, text=None, html=None):
+def _extract_location_legacy(lines, title=None, text=None, html=None):
     _, title_barrio = extract_title_parts(title)
 
     location_values = []
+    # El titulo representa el barrio publicado. Los datos estructurados pueden
+    # corresponder al pin aproximado del mapa y solo deben servir de respaldo.
+    if title_barrio:
+        location_values.append(f"{title_barrio}, Pasto, Nariño")
+
+    ubicacion_principal_prioritaria = value_after_label(
+        lines,
+        "Ubicaci\u00f3n Principal",
+        max_lookahead=3,
+    )
+    if ubicacion_principal_prioritaria:
+        location_values.append(ubicacion_principal_prioritaria)
+
     structured_barrio, structured_address = extract_structured_location(html)
 
     if structured_barrio:
         location_values.append(f"{structured_barrio}, Pasto, Nariño")
 
-    ubicacion_principal = value_after_label(lines, "Ubicación Principal", max_lookahead=3)
-    if ubicacion_principal:
-        location_values.append(ubicacion_principal)
-
     ubicacion = value_after_label(lines, "Ubicación", max_lookahead=3)
     if ubicacion:
         location_values.append(ubicacion)
-
-    if title_barrio:
-        location_values.append(f"{title_barrio}, Pasto, Nariño")
 
     full_text = " ".join([title or "", text or ""])
     match = re.search(r"([A-Za-zÁÉÍÓÚÑáéíóúñ\s\.]+),\s*Pasto,\s*Nariño", full_text, re.IGNORECASE)
@@ -478,6 +484,47 @@ def extract_location(lines, title=None, text=None, html=None):
         return "Pasto", None, structured_address
 
     return "Pasto", None, "Pasto, Nariño"
+
+def extract_location(lines, title=None, text=None, html=None):
+    """Obtiene el barrio exclusivamente del titulo principal (h1)."""
+    _, title_barrio = extract_title_parts(title)
+    ciudad = "Pasto"
+
+    if not title_barrio:
+        return ciudad, None, f"{ciudad}, Nariño"
+
+    barrio = clean_text(title_barrio)
+    direccion = clean_text(f"{barrio}, {ciudad}, Nariño")
+    return ciudad, barrio, direccion
+
+def update_existing_location(connection, publicacion_id, data):
+    barrio = clean_text(data.get("barrio"))
+    direccion = clean_text(data.get("direccion"))
+    if not barrio:
+        return False
+
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT barrio, direccion FROM publicaciones WHERE id = %s LIMIT 1",
+        (publicacion_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        return False
+
+    current_barrio = clean_text(row[0])
+    current_direccion = clean_text(row[1])
+    changed = current_barrio != barrio or current_direccion != direccion
+    if changed:
+        cursor.execute(
+            "UPDATE publicaciones SET barrio = %s, direccion = %s WHERE id = %s",
+            (barrio, direccion, publicacion_id),
+        )
+        connection.commit()
+
+    cursor.close()
+    return changed
 
 def extract_tipo_inmueble(title, lines, text):
     value = value_after_label(lines, "Tipo de Inmueble")
@@ -1342,6 +1389,8 @@ def main():
                     total_saltadas += 1
                     if update_existing_coordinates(connection, publicacion_existente_id, data):
                         print(f"[OK] Coordenadas agregadas a publicacion existente ID {publicacion_existente_id}: {data['coordenadas']}")
+                    if update_existing_location(connection, publicacion_existente_id, data):
+                        print(f"[OK] Barrio corregido desde titulo principal: {data['barrio']}")
                     print(f"[SKIP] Ya existe en base de datos por link o código. ID {publicacion_existente_id}")
                     continue
 

@@ -29,7 +29,7 @@ from scrapers.core.evidence import (
     download_images_parallel as core_download_images_parallel,
 )
 from scrapers.core.stats import print_scraper_summary, skip_bucket
-from scrapers.core.normalizers import clean_text
+from scrapers.core.normalizers import clean_text, detect_ph as core_detect_ph
 
 # ==========================================================
 # CONFIGURACIÓN GENERAL
@@ -50,7 +50,9 @@ get_or_create_fuente_id = partial(
 save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
 save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
-HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
+# Ciencuadras usa su propia opcion para que un HEADLESS=false de otro scraper
+# no haga que Chromium se abra en pantalla. Por defecto siempre corre oculto.
+HEADLESS = os.getenv("CIENCUADRAS_HEADLESS", "true").strip().lower() != "false"
 # 0 = recorrer todas las paginas detectadas.
 MAX_PAGES = int(os.getenv("MAX_PAGES", "0"))
 
@@ -404,7 +406,7 @@ def extract_tipo_inmueble(title, text):
 
     return None
 
-def extract_ph(description):
+def _extract_ph_legacy(description):
     if not description:
         return None
 
@@ -422,6 +424,62 @@ def extract_ph(description):
             return clean_text(match.group(1))
 
     return None
+
+def extract_ph(description):
+    """Extrae el nombre de la propiedad horizontal sin tragarse la descripcion."""
+    if not description:
+        return None
+
+    entity = (
+        r"Conjunto\s+(?:Residencial|Cerrado)|Conjunto|Edificio|Condominio|"
+        r"Urbanizaci[oó]n|Unidad\s+Residencial"
+    )
+    stop = (
+        r"(?=\s+(?:Torre|Bloque|Apto|Apartamento|Piso|Etapa|[ÁA]rea|Habitaciones?|"
+        r"Alcobas?|Ba[ñn]os?|Sala|Cocina|Parqueadero|Administraci[oó]n|Valor|Precio)\b|"
+        r"[\n,;.!?]|$)"
+    )
+    match = re.search(
+        rf"\b({entity})\s*[:\-]?\s*"
+        rf"([A-Za-zÁÉÍÓÚÑáéíóúñ0-9][A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s'\-_]*?){stop}",
+        description,
+        re.IGNORECASE,
+    )
+    if match:
+        label = clean_text(match.group(1))
+        name = clean_text(match.group(2)).strip(" -_:")
+        if name:
+            return clean_text(f"{label} {name}")
+
+    return core_detect_ph(description)
+
+def refresh_existing_ph(connection, publicacion_id):
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT descripcion, ph FROM publicaciones WHERE id = %s LIMIT 1",
+        (publicacion_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        return False
+
+    description, current_ph = row
+    detected_ph = extract_ph(description)
+    missing_values = {"", "NO", "SIN EDIFICIO/CONJUNTO", "SIN PH"}
+    current_normalized = clean_text(current_ph).upper() if current_ph else ""
+    should_update = bool(detected_ph and current_normalized in missing_values)
+
+    if should_update:
+        cursor.execute(
+            "UPDATE publicaciones SET ph = %s WHERE id = %s",
+            (detected_ph, publicacion_id),
+        )
+        connection.commit()
+        print(f"[OK] Propiedad horizontal corregida: {detected_ph}")
+
+    cursor.close()
+    return should_update
 
 def extract_pisos(description):
     if not description:
@@ -1344,6 +1402,7 @@ def main():
 
                 if publicacion_existente_id:
                     total_saltadas += 1
+                    refresh_existing_ph(connection, publicacion_existente_id)
                     print(f"[SKIP] Ya existe en base de datos. ID {publicacion_existente_id}")
                     continue
 
@@ -1361,6 +1420,7 @@ def main():
 
                     if publicacion_existente_id:
                         total_saltadas += 1
+                        refresh_existing_ph(connection, publicacion_existente_id)
                         print(f"[SKIP] Ya existía al momento de insertar. ID {publicacion_existente_id}")
                         continue
 

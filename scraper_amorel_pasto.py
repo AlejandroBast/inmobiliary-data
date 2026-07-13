@@ -33,7 +33,6 @@ from scrapers.core.normalizers import (
     detect_ph as core_detect_ph,
     extract_barrio as core_extract_barrio,
     parse_area as core_parse_area,
-    parse_price as core_parse_price,
     sale_status as core_sale_status,
 )
 
@@ -393,18 +392,16 @@ def extract_price(text):
     """
     Amorel a veces muestra $0 en la tarjeta, pero el valor real aparece en
     "DETALLES DE LA PUBLICACION" como VALOR $ 165.000.000.
-    Por eso SIEMPRE se calcula desde el detalle completo, no desde la tarjeta.
+    Por eso solo se aceptan cifras que tengan una senal explicita de dinero.
+    Un numero largo sin etiqueta suele ser el telefono del anunciante.
     """
-    core_price = core_parse_price(text)
-    if core_price and core_price >= MIN_SALE_PRICE:
-        return core_price
-
     candidates = []
     source = text or ""
     source_norm = normalize_text(source)
 
     contextual_patterns = [
-        r"(?:VALOR|PRECIO|VENTA|SE\s+VENDE\s+EN|SE\s+PIDE|INVERSION)\s*(?:DE|EN|COP)?\s*\$?\s*([\d][\d\s\.,']{4,})",
+        r"(?:VALOR|PRECIO)(?:\s+DE\s+VENTA)?\s*[:\-]?\s*(?:DE|EN|COP)?\s*\$?\s*([\d][\d\s\.,']{4,})",
+        r"(?:SE\s+VENDE\s+EN|SE\s+PIDE|INVERSION)\s*[:\-]?\s*(?:DE|EN|COP)?\s*\$?\s*([\d][\d\s\.,']{4,})",
         r"\$\s*([\d][\d\s\.,']{4,})",
     ]
 
@@ -805,6 +802,28 @@ LOCATION_STOP = (
     r"\s+FSE|\s+INF|\s+INFORMES|\s+CON\s|\s+TIENE\s|\s+NEGOCIABLES|$)"
 )
 
+KNOWN_BARRIOS = (
+    "CENTRO|UNICENTRO|MORASURCO|PANDIACO|ALTAMIRA|AGUALONGO|ALFAGUARA|"
+    "SOTAVENTO|MARILUZ|AQUINE|TAMASAGRA|CHAMPAGNAT|OBONUCO|CATAMBUCO|"
+    "GENOY|BUESAQUILLO|GUALMATAN|CHACHAGUI|BUESACO|SANDONA|IPIALES|"
+    "NUEVO SOL"
+)
+
+INVALID_BARRIO_WORDS = {
+    "APARTAMENTO",
+    "CASA",
+    "COCINA",
+    "COMODO",
+    "EXCELENTE",
+    "FAMILIA",
+    "HABITACION",
+    "INFORMACION",
+    "OPORTUNIDAD",
+    "PARQUEADERO",
+    "SALA",
+    "VENTA",
+}
+
 def clean_extracted_name(value):
     value = normalize_text(value)
     value = re.sub(r"^[\s\-:]+", "", value)
@@ -877,10 +896,6 @@ def extract_ph_value(text, edificio_conjunto=None):
 
 def extract_barrio(title, description):
     source = "\n".join(value for value in [title, description] if value)
-    core_barrio = core_extract_barrio(source)
-    if core_barrio:
-        return core_barrio
-
     patterns = [
         rf"\bBARRIO\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
         rf"\bSECTOR\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
@@ -897,7 +912,22 @@ def extract_barrio(title, description):
                 if barrio:
                     return barrio
 
+    known_match = re.search(rf"\b({KNOWN_BARRIOS})\b", normalize_text(source))
+    if known_match:
+        return smart_title(known_match.group(1))
+
+    core_barrio = core_extract_barrio(source)
+    if is_plausible_barrio(core_barrio):
+        return core_barrio
+
     return None
+
+def is_plausible_barrio(value):
+    normalized = normalize_text(value)
+    if not normalized or len(normalized) > 60:
+        return False
+    words = set(normalized.split())
+    return not words.intersection(INVALID_BARRIO_WORDS)
 
 def extract_location_hint(title, description, edificio_conjunto=None):
     if edificio_conjunto:
@@ -1017,7 +1047,7 @@ def extract_publication_data(url):
     return data, html, image_urls, None
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
-    _, img_dir = get_publication_evidence_dirs(publicacion_id)
+    _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
     filename = f"amorel_{sanitize_filename(codigo_archivo)}_{index:02d}.jpg"
     path = img_dir / filename
     try:
@@ -1039,6 +1069,27 @@ download_images_parallel = partial(
     image_download_workers=IMAGE_DOWNLOAD_WORKERS,
     label="imagenes Amorel",
 )
+
+def save_publication_images(connection, publicacion_id, codigo_archivo, image_urls):
+    print(f"[INFO] Imagenes detectadas: {len(image_urls)}")
+    for _, image_url, image_path in download_images_parallel(image_urls, codigo_archivo, publicacion_id):
+        insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
+
+def refresh_invalid_existing_location(connection, publicacion_id, data):
+    cursor = connection.cursor()
+    cursor.execute("SELECT barrio FROM publicaciones WHERE id = %s LIMIT 1", (publicacion_id,))
+    row = cursor.fetchone()
+    current_barrio = row[0] if row else None
+    new_barrio = data.get("barrio")
+
+    if row and not is_plausible_barrio(current_barrio) and is_plausible_barrio(new_barrio):
+        cursor.execute(
+            "UPDATE publicaciones SET barrio = %s, direccion = %s WHERE id = %s",
+            (new_barrio, data.get("direccion"), publicacion_id),
+        )
+        connection.commit()
+        print(f"[OK] Ubicacion corregida: {current_barrio or '-'} -> {new_barrio}")
+    cursor.close()
 
 def main():
     print("[INFO] Iniciando scraper Amorel Pasto")
@@ -1089,13 +1140,16 @@ def main():
             )
             if publicacion_existente_id:
                 total_saltadas += 1
+                codigo_archivo = data.get("codigo_externo") or f"publicacion_{publicacion_existente_id}"
                 html_path = save_html(
                     html,
-                    data.get("codigo_externo"),
+                    codigo_archivo,
                     publicacion_existente_id,
                     data.get("link_origen"),
                 )
                 insert_evidencia(connection, publicacion_existente_id, "html", html_path, data.get("link_origen"))
+                refresh_invalid_existing_location(connection, publicacion_existente_id, data)
+                save_publication_images(connection, publicacion_existente_id, codigo_archivo, image_urls)
                 print(f"[SKIP] Ya existe en base de datos. ID {publicacion_existente_id}")
                 continue
 
@@ -1110,13 +1164,16 @@ def main():
                 )
                 if publicacion_existente_id:
                     total_saltadas += 1
+                    codigo_archivo = data.get("codigo_externo") or f"publicacion_{publicacion_existente_id}"
                     html_path = save_html(
                         html,
-                        data.get("codigo_externo"),
+                        codigo_archivo,
                         publicacion_existente_id,
                         data.get("link_origen"),
                     )
                     insert_evidencia(connection, publicacion_existente_id, "html", html_path, data.get("link_origen"))
+                    refresh_invalid_existing_location(connection, publicacion_existente_id, data)
+                    save_publication_images(connection, publicacion_existente_id, codigo_archivo, image_urls)
                     print(f"[SKIP] Ya existia al momento de insertar. ID {publicacion_existente_id}")
                     continue
                 raise
@@ -1126,9 +1183,7 @@ def main():
             html_path = save_html(html, codigo_archivo, publicacion_id, data.get("link_origen"))
             insert_evidencia(connection, publicacion_id, "html", html_path, data.get("link_origen"))
 
-            print(f"[INFO] Imagenes detectadas: {len(image_urls)}")
-            for _, image_url, image_path in download_images_parallel(image_urls, codigo_archivo, publicacion_id):
-                insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
+            save_publication_images(connection, publicacion_id, codigo_archivo, image_urls)
 
             print(f"[OK] Guardada publicacion Amorel ID {publicacion_id}")
             print(f"[OK] Codigo externo: {data['codigo_externo']}")
