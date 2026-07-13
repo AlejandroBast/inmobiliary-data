@@ -33,7 +33,7 @@ from scrapers.core.normalizers import clean_text
 
 SEARCH_URL = os.getenv(
     "METROCUADRADO_SEARCH_URL",
-    "https://www.metrocuadrado.com/inmuebles/venta/pasto/?search=form",
+    "https://www.metrocuadrado.com/casalote-edificio-de-oficinas-edificio-de-apartamentos-apartamento-apartaestudio-casa-local-bodega-lote-finca-consultorio-oficina/venta/pasto/?search=form",
 )
 BASE_URL = "https://www.metrocuadrado.com"
 DB_CONFIG = get_db_config()
@@ -51,8 +51,10 @@ save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 PUBLICATION_URL = os.getenv("PUBLICATION_URL")
-MAX_PUBLICATIONS = int(os.getenv("MAX_PUBLICATIONS", "0"))
-LIST_SCROLLS = int(os.getenv("METROCUADRADO_LIST_SCROLLS", "8"))
+# Metrocuadrado no debe heredar el MAX_PUBLICATIONS global usado para pruebas
+# cortas de otros scrapers. Cero significa procesar todos los enlaces hallados.
+MAX_PUBLICATIONS = int(os.getenv("METROCUADRADO_MAX_PUBLICATIONS", "0"))
+LIST_SCROLLS = int(os.getenv("METROCUADRADO_LIST_SCROLLS", "0"))
 SCROLL_STALL_LIMIT = int(os.getenv("METROCUADRADO_STALL_SCROLLS", "3"))
 SEARCH_LOAD_WAIT_MS = int(os.getenv("SEARCH_LOAD_WAIT_MS", "3000"))
 DETAIL_LOAD_WAIT_MS = int(os.getenv("DETAIL_LOAD_WAIT_MS", "1800"))
@@ -291,11 +293,23 @@ def extract_image_urls(source):
 
     return cleaned
 
-def save_existing_html_evidence(connection, html, data, publicacion_id, link):
+def save_existing_evidence(connection, html, image_urls, data, publicacion_id, link):
     codigo_archivo = data.get("codigo_externo") or f"publicacion_{publicacion_id}"
     html_path = save_html(html, codigo_archivo, publicacion_id)
     insert_evidencia(connection, publicacion_id, "html", html_path, link)
     print(f"[OK] HTML actualizado para publicacion existente ID {publicacion_id}")
+
+    print(f"[INFO] Fotos detectadas para publicacion existente: {len(image_urls)}")
+    downloaded_images = download_images_parallel(
+        image_urls if DOWNLOAD_IMAGES else [],
+        codigo_archivo,
+        publicacion_id,
+    )
+    for _, image_url, image_path in downloaded_images:
+        insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
+
+    if DOWNLOAD_IMAGES and image_urls and not downloaded_images:
+        print(f"[WARN] No se pudo guardar ninguna foto para publicacion existente ID {publicacion_id}")
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
@@ -326,6 +340,24 @@ download_images_parallel = partial(
     image_download_workers=IMAGE_DOWNLOAD_WORKERS,
     label="fotos",
 )
+
+def extract_listing_links_from_html(html):
+    """Recupera tarjetas embebidas aunque el navegador no cree todos los <a>."""
+    source = html_module.unescape(html or "")
+    pattern = re.compile(
+        r"(?:https?://(?:www\.)?metrocuadrado\.com)?"
+        r"(/inmueble/venta-[^\"'< >?]+/\d+-M\d+)",
+        re.IGNORECASE,
+    )
+    links = []
+    for match in pattern.finditer(source):
+        path = match.group(1)
+        if "pasto" not in path.lower():
+            continue
+        link = urljoin(BASE_URL, path).rstrip("/")
+        if link not in links:
+            links.append(link)
+    return links
 
 def collect_publication_links(page):
     audit = ScraperAudit("Metrocuadrado", PUBLICATION_URL or SEARCH_URL)
@@ -370,18 +402,25 @@ def collect_publication_links(page):
     audit.set_listing_summary(
         total_reported=total_results,
         pages_expected=None,
-        pages_planned=LIST_SCROLLS,
+        pages_planned=LIST_SCROLLS if LIST_SCROLLS > 0 else None,
         page_size=page_size,
     )
     print(f"[INFO] Total resultados detectados: {total_results}")
     print(f"[INFO] Resultados por pagina detectados: {page_size}")
-    print(f"[INFO] Scrolls maximos de seguridad: {LIST_SCROLLS}")
+    print(
+        f"[INFO] METROCUADRADO_LIST_SCROLLS: "
+        f"{LIST_SCROLLS if LIST_SCROLLS > 0 else 'sin limite'}"
+    )
     print(f"[INFO] Scrolls sin links nuevos para detener: {SCROLL_STALL_LIMIT}")
 
-    links = []
+    links = extract_listing_links_from_html(page.content())
+    print(f"[INFO] Links embebidos recuperados del HTML: {len(links)}")
     stalled_scrolls = 0
 
-    for scroll_index in range(LIST_SCROLLS):
+    scroll_index = 0
+    reached_configured_limit = False
+    while LIST_SCROLLS == 0 or scroll_index < LIST_SCROLLS:
+        scroll_index += 1
         page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         page.wait_for_timeout(SCROLL_WAIT_MS)
 
@@ -417,14 +456,15 @@ def collect_publication_links(page):
                 duplicate_links += 1
 
         audit.record_scroll(
-            scroll_index + 1,
+            scroll_index,
             links_count=len(current_links),
             new_links_count=new_links,
             duplicate_links_count=duplicate_links,
         )
 
+        scroll_progress = f"{scroll_index}/{LIST_SCROLLS}" if LIST_SCROLLS > 0 else str(scroll_index)
         print(
-            f"[INFO] Scroll {scroll_index + 1}/{LIST_SCROLLS}: "
+            f"[INFO] Scroll {scroll_progress}: "
             f"{len(current_links)} visibles, {new_links} nuevos, {duplicate_links} repetidos, "
             f"{len(links)} acumulados"
         )
@@ -442,7 +482,10 @@ def collect_publication_links(page):
             print(f"[INFO] {message}")
             audit.add_note(message)
             break
-    else:
+
+        reached_configured_limit = LIST_SCROLLS > 0 and scroll_index >= LIST_SCROLLS
+
+    if reached_configured_limit and stalled_scrolls < SCROLL_STALL_LIMIT:
         audit.add_note(
             f"Se alcanzo METROCUADRADO_LIST_SCROLLS={LIST_SCROLLS}; si faltan anuncios, "
             "ese limite de seguridad puede haber detenido el recorrido."
@@ -584,7 +627,14 @@ def main():
 
                 if publicacion_existente_id:
                     total_saltadas += 1
-                    save_existing_html_evidence(connection, html, data, publicacion_existente_id, link)
+                    save_existing_evidence(
+                        connection,
+                        html,
+                        image_urls,
+                        data,
+                        publicacion_existente_id,
+                        link,
+                    )
                     print(f"[SKIP] Ya existe en base de datos. ID {publicacion_existente_id}")
                     continue
 
@@ -601,7 +651,14 @@ def main():
 
                     if publicacion_existente_id:
                         total_saltadas += 1
-                        save_existing_html_evidence(connection, html, data, publicacion_existente_id, link)
+                        save_existing_evidence(
+                            connection,
+                            html,
+                            image_urls,
+                            data,
+                            publicacion_existente_id,
+                            link,
+                        )
                         print(f"[SKIP] Ya existia al momento de insertar. ID {publicacion_existente_id}")
                         continue
 

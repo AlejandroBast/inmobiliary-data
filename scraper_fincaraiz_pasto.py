@@ -57,7 +57,7 @@ save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas por el contador del sitio.
-MAX_PAGES = int(os.getenv("MAX_PAGES", "0"))
+MAX_PAGES = int(os.getenv("FINCARAIZ_MAX_PAGES", "0"))
 
 SEARCH_LOAD_WAIT_MS = int(os.getenv("SEARCH_LOAD_WAIT_MS", "2500"))
 DETAIL_LOAD_WAIT_MS = int(os.getenv("DETAIL_LOAD_WAIT_MS", "1400"))
@@ -1123,7 +1123,7 @@ def collect_publication_links(page):
     if MAX_PAGES > 0 and detected_pages > total_pages:
         limit_reason = (
             f"Se revisaron {total_pages} de {detected_pages} pagina(s) porque "
-            f"MAX_PAGES={MAX_PAGES} limito el recorrido."
+            f"FINCARAIZ_MAX_PAGES={MAX_PAGES} limito el recorrido."
         )
 
     audit.set_listing_summary(
@@ -1136,7 +1136,7 @@ def collect_publication_links(page):
 
     print(f"[INFO] Total resultados detectados: {total_results}")
     print(f"[INFO] Resultados por pagina detectados: {page_size}")
-    print(f"[INFO] Limite MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
+    print(f"[INFO] FINCARAIZ_MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
     print(f"[INFO] Total páginas a revisar: {total_pages}")
 
     for current_page in range(1, total_pages + 1):
@@ -1333,7 +1333,7 @@ def main():
     print("[INFO] Fuente revisada: Fincaraiz")
     print(f"[INFO] SEARCH_URL: {SEARCH_URL}")
     print(f"[INFO] HEADLESS: {HEADLESS}")
-    print(f"[INFO] MAX_PAGES: {MAX_PAGES}")
+    print(f"[INFO] FINCARAIZ_MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
 
     connection = get_connection()
     fuente_id = get_or_create_fuente_id(connection)

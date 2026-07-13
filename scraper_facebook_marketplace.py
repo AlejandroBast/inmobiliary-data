@@ -85,7 +85,7 @@ DATE_LISTED_DAYS = os.getenv("FACEBOOK_DATE_LISTED_DAYS")
 MIN_PRICE_FILTER = os.getenv("FACEBOOK_MIN_PRICE")
 MAX_PRICE_FILTER = os.getenv("FACEBOOK_MAX_PRICE")
 MIN_SALE_PRICE = int(os.getenv("FACEBOOK_MIN_SALE_PRICE", "10000000"))
-MAX_SCROLLS = int(os.getenv("FACEBOOK_MAX_SCROLLS", "30"))
+MAX_SCROLLS = int(os.getenv("FACEBOOK_MAX_SCROLLS", "0"))
 STALL_SCROLLS = int(os.getenv("FACEBOOK_STALL_SCROLLS", "4"))
 MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "0"))
 MAX_DETAILS = int(os.getenv("FACEBOOK_MAX_DETAILS", "0"))
@@ -346,7 +346,7 @@ def collect_publication_links(context):
     audit.set_listing_summary(
         total_reported=None,
         pages_expected=None,
-        pages_planned=len(search_urls) * MAX_SCROLLS,
+        pages_planned=len(search_urls) * MAX_SCROLLS if MAX_SCROLLS > 0 else None,
         page_size=None,
         limit_reason=None,
     )
@@ -376,7 +376,9 @@ def collect_publication_links(context):
             continue
 
         stall_count = 0
-        for scroll_number in range(1, MAX_SCROLLS + 1):
+        scroll_number = 0
+        while MAX_SCROLLS == 0 or scroll_number < MAX_SCROLLS:
+            scroll_number += 1
             page.wait_for_timeout(int(SCROLL_PAUSE_SECONDS * 1000))
             page_links = extract_links_from_page(page)
             new_links = 0
@@ -402,8 +404,9 @@ def collect_publication_links(context):
                 new_links_count=new_links,
                 duplicate_links_count=duplicate_links,
             )
+            scroll_progress = f"{scroll_number}/{MAX_SCROLLS}" if MAX_SCROLLS > 0 else str(scroll_number)
             print(
-                f"[INFO] Scroll {scroll_number}/{MAX_SCROLLS}: "
+                f"[INFO] Scroll {scroll_progress}: "
                 f"{len(page_links)} links visibles, {new_links} nuevos, {duplicate_links} repetidos"
             )
 
@@ -1096,7 +1099,7 @@ def main():
     print(f"[INFO] FACEBOOK_SEARCH_CITY: {SEARCH_CITY}")
     print(f"[INFO] FACEBOOK_HEADLESS: {HEADLESS}")
     print(f"[INFO] FACEBOOK_DRY_RUN: {DRY_RUN}")
-    print(f"[INFO] FACEBOOK_MAX_SCROLLS: {MAX_SCROLLS}")
+    print(f"[INFO] FACEBOOK_MAX_SCROLLS: {MAX_SCROLLS if MAX_SCROLLS > 0 else 'sin limite'}")
     print(f"[INFO] FACEBOOK_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
     print(f"[INFO] Perfil Chromium: {PROFILE_DIR.resolve()}")
 

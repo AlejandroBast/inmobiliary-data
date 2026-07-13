@@ -54,7 +54,7 @@ save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 # no haga que Chromium se abra en pantalla. Por defecto siempre corre oculto.
 HEADLESS = os.getenv("CIENCUADRAS_HEADLESS", "true").strip().lower() != "false"
 # 0 = recorrer todas las paginas detectadas.
-MAX_PAGES = int(os.getenv("MAX_PAGES", "0"))
+MAX_PAGES = int(os.getenv("CIENCUADRAS_MAX_PAGES", "0"))
 
 GALLERY_VISIBLE_WAIT_MS = int(os.getenv("GALLERY_VISIBLE_WAIT_MS", "400"))
 GALLERY_OPEN_WAIT_MS = int(os.getenv("GALLERY_OPEN_WAIT_MS", "600"))
@@ -1146,7 +1146,7 @@ def collect_publication_links(page):
     if MAX_PAGES > 0 and detected_pages > total_pages:
         limit_reason = (
             f"Se revisaron {total_pages} de {detected_pages} pagina(s) porque "
-            f"MAX_PAGES={MAX_PAGES} limito el recorrido."
+            f"CIENCUADRAS_MAX_PAGES={MAX_PAGES} limito el recorrido."
         )
 
     audit.set_listing_summary(
@@ -1361,7 +1361,7 @@ def main():
     print("[INFO] Iniciando scraper Ciencuadras Pasto")
     print("[INFO] Fuente revisada: Ciencuadras")
     print(f"[INFO] HEADLESS: {HEADLESS}")
-    print(f"[INFO] MAX_PAGES: {MAX_PAGES}")
+    print(f"[INFO] CIENCUADRAS_MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
 
     connection = get_connection()
     fuente_id = get_or_create_fuente_id(connection)
