@@ -2,7 +2,6 @@ import {
   getBarrios,
   getFuentes,
   getPublicaciones,
-  getPublicacionesTotal,
   type PublicacionFilters,
 } from "@/app/actions/publicaciones"
 import { AppShell } from "@/components/app-shell"
@@ -19,7 +18,8 @@ function firstValue(value: string | string[] | undefined) {
 }
 
 function hasActiveFilters(filters: PublicacionFilters) {
-  return Object.values(filters).some((value) => String(value ?? "").trim() !== "")
+  const { page, pageSize, ...filterValues } = filters
+  return Object.values(filterValues).some((value) => String(value ?? "").trim() !== "")
 }
 
 function buildSearchString(params: Record<string, string | string[] | undefined>) {
@@ -58,13 +58,14 @@ export default async function DashboardPage({
     m2Max: firstValue(params.m2Max),
     phTipo: firstValue(params.phTipo),
     parqueadero: firstValue(params.parqueadero),
+    page: firstValue(params.page),
+    pageSize: firstValue(params.pageSize),
   }
 
-  const [publicaciones, fuentes, barriosData, totalPublicaciones] = await Promise.all([
+  const [publicacionesResult, fuentes, barriosData] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
-    getPublicacionesTotal(),
   ])
 
   const publicacionesSearch = buildSearchString(params)
@@ -113,8 +114,8 @@ export default async function DashboardPage({
       </div>
 
       <PublicacionesDashboardStats
-        publicaciones={publicaciones}
-        totalPublicaciones={totalPublicaciones}
+        publicaciones={publicacionesResult.data}
+        totalPublicaciones={publicacionesResult.total}
         hasActiveFilters={hasActiveFilters(filtros)}
       />
     </AppShell>

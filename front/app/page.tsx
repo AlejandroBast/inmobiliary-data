@@ -23,11 +23,13 @@ function firstValue(value: string | string[] | undefined) {
 }
 
 function hasActiveFilters(filters: PublicacionFilters) {
-  return Object.values(filters).some((value) => String(value ?? "").trim() !== "")
+  const { page, pageSize, ...filterValues } = filters
+  return Object.values(filterValues).some((value) => String(value ?? "").trim() !== "")
 }
 
 function activeFilterCount(filters: PublicacionFilters) {
-  return Object.values(filters).filter((value) => String(value ?? "").trim() !== "").length
+  const { page, pageSize, ...filterValues } = filters
+  return Object.values(filterValues).filter((value) => String(value ?? "").trim() !== "").length
 }
 
 function buildSearchString(params: Record<string, string | string[] | undefined>) {
@@ -66,9 +68,11 @@ export default async function Page({
     m2Max: firstValue(params.m2Max),
     phTipo: firstValue(params.phTipo),
     parqueadero: firstValue(params.parqueadero),
+    page: firstValue(params.page),
+    pageSize: firstValue(params.pageSize),
   }
 
-  const [publicaciones, fuentes, barriosData] = await Promise.all([
+  const [publicacionesResult, fuentes, barriosData] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
@@ -125,9 +129,15 @@ export default async function Page({
       >
         <section id="publicaciones" className="min-w-0">
           <PublicacionesManagerPro
-            publicaciones={publicaciones}
+            publicaciones={publicacionesResult.data}
             fuentes={fuentes}
             hasActiveFilters={filtrosActivos}
+            pagination={{
+              page: publicacionesResult.page,
+              pageSize: publicacionesResult.pageSize,
+              total: publicacionesResult.total,
+              totalPages: publicacionesResult.totalPages,
+            }}
           />
         </section>
       </PublicacionesDataLayout>

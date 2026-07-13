@@ -3,34 +3,51 @@ import re
 import json
 import time
 import html as html_module
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-import mysql.connector
 import requests
-from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from scraper_audit import ScraperAudit
+from functools import partial
 
-
-load_dotenv()
+from scrapers.core.config import get_db_config
+from scrapers.core.db import (
+    get_connection as core_get_connection,
+    get_or_create_fuente_id as core_get_or_create_fuente_id,
+    insert_evidencia,
+    insert_publicacion,
+    publicacion_ya_existe,
+)
+from scrapers.core.evidence import (
+    get_publication_evidence_dirs,
+    sanitize_filename,
+    save_html as core_save_html,
+    save_screenshot as core_save_screenshot,
+    download_images_parallel as core_download_images_parallel,
+)
+from scrapers.core.stats import print_scraper_summary, skip_bucket
+from scrapers.core.normalizers import clean_text
 
 SEARCH_URL = os.getenv(
     "METROCUADRADO_SEARCH_URL",
     "https://www.metrocuadrado.com/inmuebles/venta/pasto/?search=form",
 )
 BASE_URL = "https://www.metrocuadrado.com"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+DB_CONFIG = get_db_config()
+EVIDENCE_PREFIX = "metrocuadrado"
+get_connection = partial(core_get_connection, db_config=DB_CONFIG)
+get_or_create_fuente_id = partial(
+    core_get_or_create_fuente_id,
+    nombre="Metrocuadrado",
+    url_base=BASE_URL,
+    tipo_fuente="portal",
+    descripcion="Scraper de inmuebles en venta en Pasto desde Metrocuadrado.",
+)
+save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
+save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 PUBLICATION_URL = os.getenv("PUBLICATION_URL")
@@ -64,22 +81,12 @@ TIPOS_INMUEBLE = [
     "Edificio",
 ]
 
-
-def clean_text(value):
-    if value is None:
-        return None
-
-    value = re.sub(r"\s+", " ", str(value)).strip()
-    return value if value else None
-
-
 def only_digits(value):
     if not value:
         return None
 
     digits = re.sub(r"[^\d]", "", str(value))
     return int(digits) if digits else None
-
 
 def extract_total_results(text):
     if not text:
@@ -97,7 +104,6 @@ def extract_total_results(text):
             return only_digits(match.group(match.lastindex or 1))
 
     return None
-
 
 def extract_result_window(text):
     if not text:
@@ -120,7 +126,6 @@ def extract_result_window(text):
         return start, end, total
 
     return None
-
 
 def parse_decimal(value):
     if value is None:
@@ -146,7 +151,6 @@ def parse_decimal(value):
     except ValueError:
         return None
 
-
 def parse_int(value):
     if value is None:
         return None
@@ -154,29 +158,9 @@ def parse_int(value):
     match = re.search(r"\d+", str(value))
     return int(match.group(0)) if match else None
 
-
-def sanitize_filename(value):
-    value = clean_text(value) or "archivo"
-    value = re.sub(r"[^A-Za-z0-9_\-\.]+", "_", value)
-    return value[:120]
-
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    screenshot_dir = base_dir / "screenshots"
-
-    for folder in [html_dir, img_dir, screenshot_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    return html_dir, img_dir, screenshot_dir
-
-
 def source_text(html):
     text = html_module.unescape(html or "")
     return text.replace('\\"', '"').replace("\\/", "/")
-
 
 def regex_value(source, *patterns):
     for pattern in patterns:
@@ -186,11 +170,9 @@ def regex_value(source, *patterns):
 
     return None
 
-
 def regex_number(source, *patterns):
     value = regex_value(source, *patterns)
     return parse_decimal(value)
-
 
 def decode_json_text(value):
     if not value:
@@ -201,7 +183,6 @@ def decode_json_text(value):
     except Exception:
         return clean_text(value.replace("\\n", " ").replace('\\"', '"'))
 
-
 def extract_codigo(url, source):
     return (
         regex_value(source, r'"propertyId"\s*:\s*"([^"]+)"')
@@ -209,13 +190,11 @@ def extract_codigo(url, source):
         or regex_value(url, r"/([^/]+)$")
     )
 
-
 def extract_title(source, text):
     return (
         regex_value(source, r'"title"\s*:\s*"([^"]+)"')
         or regex_value(text, r"([A-Za-zÁÉÍÓÚÑáéíóúñ ]+ en Venta,[^\n\r]+)")
     )
-
 
 def extract_tipo(title, source):
     property_type = regex_value(source, r'"propertyType"\s*:\s*\{[^{}]*"nombre"\s*:\s*"([^"]+)"')
@@ -228,7 +207,6 @@ def extract_tipo(title, source):
             return tipo
 
     return None
-
 
 def extract_barrio(source, title):
     barrio = (
@@ -246,7 +224,6 @@ def extract_barrio(source, title):
 
     return None
 
-
 def coordinate_float(value):
     if value is None:
         return None
@@ -256,7 +233,6 @@ def coordinate_float(value):
     except Exception:
         return None
 
-
 def coordinate_result(latitud, longitud):
     latitud = coordinate_float(latitud)
     longitud = coordinate_float(longitud)
@@ -265,7 +241,6 @@ def coordinate_result(latitud, longitud):
         return f"{latitud},{longitud}", latitud, longitud
 
     return None, None, None
-
 
 def extract_coordinates(source):
     match = re.search(
@@ -285,7 +260,6 @@ def extract_coordinates(source):
         return coordinate_result(match.group(2), match.group(1))
 
     return None, None, None
-
 
 def extract_image_urls(source):
     urls = []
@@ -317,153 +291,11 @@ def extract_image_urls(source):
 
     return cleaned
 
-
-def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
-
-
-def get_or_create_fuente_id(connection):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-        """,
-        (
-            "Metrocuadrado",
-            BASE_URL,
-            "portal",
-            "Scraper de inmuebles en venta en Pasto desde Metrocuadrado",
-        ),
-    )
-    connection.commit()
-    fuente_id = cursor.lastrowid
-    cursor.close()
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,),
-        )
-
-    result = cursor.fetchone()
-    cursor.close()
-    return result[0] if result else None
-
-
-def insert_publicacion(connection, data):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO publicaciones (
-            fuente_id, codigo_externo, link_origen, links_adicionales,
-            coordenadas, latitud, longitud, direccion, ciudad, barrio,
-            tipo_inmueble, ph, estrato, descripcion, precio, m2,
-            m2_construido, antiguedad, pisos, habitaciones, banios,
-            parqueadero, administracion, notas
-        )
-        VALUES (
-            %(fuente_id)s, %(codigo_externo)s, %(link_origen)s, %(links_adicionales)s,
-            %(coordenadas)s, %(latitud)s, %(longitud)s, %(direccion)s, %(ciudad)s, %(barrio)s,
-            %(tipo_inmueble)s, %(ph)s, %(estrato)s, %(descripcion)s, %(precio)s, %(m2)s,
-            %(m2_construido)s, %(antiguedad)s, %(pisos)s, %(habitaciones)s, %(banios)s,
-            %(parqueadero)s, %(administracion)s, %(notas)s
-        )
-        """,
-        data,
-    )
-    connection.commit()
-    publicacion_id = cursor.lastrowid
-    cursor.close()
-    return publicacion_id
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo),
-    )
-
-    if cursor.fetchone():
-        cursor.close()
-        return
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion
-        (publicacion_id, tipo, ruta_archivo, url_original)
-        VALUES (%s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original),
-    )
-    connection.commit()
-    cursor.close()
-
-
-def save_html(html, codigo_archivo, publicacion_id):
-    html_dir, _, _ = get_publication_evidence_dirs(publicacion_id)
-    path = html_dir / f"metrocuadrado_{sanitize_filename(codigo_archivo)}.html"
-
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(html)
-
-    return path
-
-
 def save_existing_html_evidence(connection, html, data, publicacion_id, link):
     codigo_archivo = data.get("codigo_externo") or f"publicacion_{publicacion_id}"
     html_path = save_html(html, codigo_archivo, publicacion_id)
     insert_evidencia(connection, publicacion_id, "html", html_path, link)
     print(f"[OK] HTML actualizado para publicacion existente ID {publicacion_id}")
-
-
-def save_screenshot(page, codigo_archivo, publicacion_id):
-    _, _, screenshot_dir = get_publication_evidence_dirs(publicacion_id)
-    path = screenshot_dir / f"metrocuadrado_{sanitize_filename(codigo_archivo)}.png"
-
-    try:
-        page.screenshot(path=str(path), full_page=True)
-        return path
-    except Exception as error:
-        print(f"[WARN] No se pudo guardar screenshot: {error}")
-        return None
-
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
@@ -488,31 +320,12 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
         print(f"[WARN] No se pudo descargar imagen: {image_url} | {error}")
         return None
 
-
-def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
-    if not image_urls or not DOWNLOAD_IMAGES:
-        return []
-
-    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
-    downloaded = []
-    print(f"[INFO] Descargando {len(image_urls)} fotos con {workers} hilos")
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(download_image, image_url, codigo_archivo, index, publicacion_id): (index, image_url)
-            for index, image_url in enumerate(image_urls, start=1)
-        }
-
-        for future in as_completed(futures):
-            index, image_url = futures[future]
-            image_path = future.result()
-            if image_path:
-                print(f"[OK] Foto descargada {index}/{len(image_urls)}")
-                downloaded.append((index, image_url, image_path))
-
-    downloaded.sort(key=lambda item: item[0])
-    return downloaded
-
+download_images_parallel = partial(
+    core_download_images_parallel,
+    download_image_func=download_image,
+    image_download_workers=IMAGE_DOWNLOAD_WORKERS,
+    label="fotos",
+)
 
 def collect_publication_links(page):
     audit = ScraperAudit("Metrocuadrado", PUBLICATION_URL or SEARCH_URL)
@@ -647,7 +460,6 @@ def collect_publication_links(page):
 
     return links, audit
 
-
 def extract_publication_data(page, url, fuente_id):
     print(f"[INFO] Extrayendo publicacion: {url}")
     page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -722,14 +534,18 @@ def extract_publication_data(page, url, fuente_id):
 
     return data, html, image_urls
 
-
 def main():
+    print("[INFO] Iniciando scraper Metrocuadrado Pasto")
+    print("[INFO] Fuente revisada: Metrocuadrado")
     connection = get_connection()
     fuente_id = get_or_create_fuente_id(connection)
 
     total_nuevas = 0
     total_saltadas = 0
     total_omitidas = 0
+    total_sin_precio = 0
+    total_no_venta = 0
+    total_sin_barrio = 0
     total_errores = 0
 
     with sync_playwright() as playwright:
@@ -755,6 +571,7 @@ def main():
 
                 if not data:
                     total_omitidas += 1
+                    total_sin_precio += 1
                     audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
@@ -803,7 +620,7 @@ def main():
                     insert_evidencia(connection, publicacion_id, "screenshot", screenshot_path, link)
 
                 print(f"[INFO] Fotos detectadas: {len(image_urls)}")
-                downloaded_images = download_images_parallel(image_urls, codigo_archivo, publicacion_id)
+                downloaded_images = download_images_parallel(image_urls if DOWNLOAD_IMAGES else [], codigo_archivo, publicacion_id)
                 for _, image_url, image_path in downloaded_images:
                     insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
 
@@ -826,19 +643,27 @@ def main():
     connection.close()
 
     print("\n[OK] Scraping Metrocuadrado finalizado.")
-    print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
-    print(f"[RESUMEN] Saltadas porque ya existian: {total_saltadas}")
-    print(f"[RESUMEN] Omitidas: {total_omitidas}")
-    print(f"[RESUMEN] Errores: {total_errores}")
+    print_scraper_summary(
+        fuente="Metrocuadrado",
+        total_encontrado=len(publication_links),
+        guardadas=total_nuevas,
+        descartadas_sin_precio=total_sin_precio,
+        descartadas_no_venta=total_no_venta,
+        descartadas_sin_barrio=total_sin_barrio,
+        duplicadas=total_saltadas,
+        errores=total_errores,
+    )
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
         omitidas=total_omitidas,
+        omitidas_sin_precio=total_sin_precio,
+        omitidas_no_venta=total_no_venta,
+        omitidas_sin_barrio=total_sin_barrio,
         errores=total_errores,
     )
     audit.print_summary(len(publication_links))
     audit.save(len(publication_links))
-
 
 if __name__ == "__main__":
     main()

@@ -3,40 +3,57 @@ import re
 import json
 import time
 import math
-import hashlib
 import html as html_module
 import requests
-import mysql.connector
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
-from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from scraper_audit import ScraperAudit
+from functools import partial
 
+from scrapers.core.config import get_db_config
+from scrapers.core.db import (
+    get_connection as core_get_connection,
+    get_or_create_fuente_id as core_get_or_create_fuente_id,
+    insert_evidencia,
+    insert_publicacion,
+    publicacion_ya_existe,
+    update_existing_coordinates,
+)
+from scrapers.core.evidence import (
+    get_publication_evidence_dirs,
+    sanitize_filename,
+    save_html as core_save_html,
+    save_screenshot as core_save_screenshot,
+    download_images_parallel as core_download_images_parallel,
+)
+from scrapers.core.stats import print_scraper_summary, skip_bucket
+from scrapers.core.normalizers import clean_text
 
 # ==========================================================
 # CONFIGURACIÓN GENERAL
 # ==========================================================
-
-load_dotenv()
 
 SEARCH_URL = os.getenv(
     "FINCARAIZ_SEARCH_URL",
     "https://www.fincaraiz.com.co/venta/pasto/narino"
 )
 BASE_URL = "https://www.fincaraiz.com.co"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+DB_CONFIG = get_db_config()
+EVIDENCE_PREFIX = "fincaraiz"
+get_connection = partial(core_get_connection, db_config=DB_CONFIG)
+get_or_create_fuente_id = partial(
+    core_get_or_create_fuente_id,
+    nombre="Fincaraiz",
+    url_base=BASE_URL,
+    tipo_fuente="portal",
+    descripcion="Portal inmobiliario usado para extraccion automatica de publicaciones en venta en Pasto, Narino.",
+)
+save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
+save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas por el contador del sitio.
@@ -53,18 +70,9 @@ IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "12"))
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
-
 # ==========================================================
 # UTILIDADES
 # ==========================================================
-
-def clean_text(value):
-    if value is None:
-        return None
-
-    value = re.sub(r"\s+", " ", str(value)).strip()
-    return value if value else None
-
 
 def get_lines(text):
     if not text:
@@ -72,14 +80,12 @@ def get_lines(text):
 
     return [line.strip() for line in text.splitlines() if line.strip()]
 
-
 def only_digits(value):
     if not value:
         return None
 
     digits = re.sub(r"[^\d]", "", str(value))
     return int(digits) if digits else None
-
 
 def parse_colombian_decimal(value):
     """
@@ -120,30 +126,12 @@ def parse_colombian_decimal(value):
     except ValueError:
         return None
 
-
 def parse_int(value):
     if value is None:
         return None
 
     match = re.search(r"\d+", str(value))
     return int(match.group()) if match else None
-
-
-def sanitize_filename(value):
-    value = value or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", str(value))
-    return value[:120]
-
-
-def file_hash(path):
-    sha256 = hashlib.sha256()
-
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(8192), b""):
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
-
 
 def normalize_label(value):
     value = clean_text(value) or ""
@@ -153,7 +141,6 @@ def normalize_label(value):
     value = value.replace("ó", "o").replace("ú", "u").replace("ñ", "n")
     value = re.sub(r"\s+", " ", value).strip()
     return value
-
 
 def value_after_label(lines, label, max_lookahead=5):
     """
@@ -192,7 +179,6 @@ def value_after_label(lines, label, max_lookahead=5):
 
     return None
 
-
 def extract_section(lines, start_label, stop_labels):
     start_normalized = normalize_label(start_label)
     stop_normalized = [normalize_label(label) for label in stop_labels]
@@ -218,7 +204,6 @@ def extract_section(lines, start_label, stop_labels):
 
     return clean_text(" ".join(content))
 
-
 # ==========================================================
 # EXTRACCIÓN DE DATOS FINCARAÍZ
 # ==========================================================
@@ -236,7 +221,6 @@ TIPOS_INMUEBLE = [
     "Finca",
     "Bodega"
 ]
-
 
 def extract_title_parts(title):
     """
@@ -272,7 +256,6 @@ def extract_title_parts(title):
 
     return tipo_inmueble, barrio
 
-
 def extract_total_results(text):
     if not text:
         return None
@@ -290,7 +273,6 @@ def extract_total_results(text):
             return only_digits(match.group(1))
 
     return None
-
 
 def extract_result_window(text):
     if not text:
@@ -311,7 +293,6 @@ def extract_result_window(text):
                 return start, end, total
 
     return None
-
 
 def extract_codigo(text, url=None):
     source = text or ""
@@ -337,7 +318,6 @@ def extract_codigo(text, url=None):
 
     return None
 
-
 def extract_precio(text):
     if not text:
         return None
@@ -357,7 +337,6 @@ def extract_precio(text):
 
     return None
 
-
 def extract_number_by_label(lines, *labels):
     for label in labels:
         value = value_after_label(lines, label)
@@ -368,7 +347,6 @@ def extract_number_by_label(lines, *labels):
 
     return None
 
-
 def extract_area_by_label(lines, *labels):
     for label in labels:
         value = value_after_label(lines, label)
@@ -378,7 +356,6 @@ def extract_area_by_label(lines, *labels):
             return number
 
     return None
-
 
 def first_json_value(data, path):
     current = data
@@ -396,7 +373,6 @@ def first_json_value(data, path):
         current = current[0] if current else None
 
     return clean_text(current) if isinstance(current, str) else None
-
 
 def extract_embedded_property_data(html):
     if not html:
@@ -418,7 +394,6 @@ def extract_embedded_property_data(html):
 
     data = next_data.get("props", {}).get("pageProps", {}).get("data", {})
     return data if isinstance(data, dict) else {}
-
 
 def extract_barrio_from_address(address):
     address = clean_text(address)
@@ -442,7 +417,6 @@ def extract_barrio_from_address(address):
 
     return barrio.title()
 
-
 def extract_structured_location(html):
     data = extract_embedded_property_data(html)
 
@@ -452,7 +426,6 @@ def extract_structured_location(html):
 
     address = first_json_value(data, ["address"])
     return extract_barrio_from_address(address), address
-
 
 def extract_location(lines, title=None, text=None, html=None):
     _, title_barrio = extract_title_parts(title)
@@ -506,7 +479,6 @@ def extract_location(lines, title=None, text=None, html=None):
 
     return "Pasto", None, "Pasto, Nariño"
 
-
 def extract_tipo_inmueble(title, lines, text):
     value = value_after_label(lines, "Tipo de Inmueble")
 
@@ -532,7 +504,6 @@ def extract_tipo_inmueble(title, lines, text):
 
     return None
 
-
 def extract_estrato(lines):
     value = value_after_label(lines, "Estrato")
 
@@ -543,7 +514,6 @@ def extract_estrato(lines):
         return None
 
     return parse_int(value)
-
 
 def extract_pisos(lines, description):
     value = value_after_label(lines, "Cantidad de pisos")
@@ -559,7 +529,6 @@ def extract_pisos(lines, description):
             return int(match.group(1))
 
     return None
-
 
 def extract_administracion(lines, text):
     value = value_after_label(lines, "Administración")
@@ -587,7 +556,6 @@ def extract_administracion(lines, text):
 
     return None
 
-
 def extract_ph(description):
     if not description:
         return None
@@ -608,10 +576,8 @@ def extract_ph(description):
 
     return None
 
-
 def valid_colombia_coordinates(latitud, longitud):
     return latitud is not None and longitud is not None and -5 <= latitud <= 15 and -82 <= longitud <= -66
-
 
 def coordinate_float(value):
     if value is None:
@@ -622,7 +588,6 @@ def coordinate_float(value):
     except Exception:
         return None
 
-
 def coordinate_result(latitud, longitud):
     latitud = coordinate_float(latitud)
     longitud = coordinate_float(longitud)
@@ -631,7 +596,6 @@ def coordinate_result(latitud, longitud):
         return f"{latitud},{longitud}", latitud, longitud
 
     return None
-
 
 def find_coordinates_in_data(value):
     if isinstance(value, dict):
@@ -687,7 +651,6 @@ def find_coordinates_in_data(value):
 
     return None
 
-
 def extract_coordinates_from_source(html, text):
     structured_result = find_coordinates_in_data(extract_embedded_property_data(html))
 
@@ -728,262 +691,13 @@ def extract_coordinates_from_source(html, text):
 
     return None, None, None
 
-
 # ==========================================================
 # BASE DE DATOS
 # ==========================================================
 
-def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
-
-
-def get_or_create_fuente_id(connection):
-    sql = """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-    """
-
-    values = (
-        "Fincaraiz",
-        "https://www.fincaraiz.com.co",
-        "portal",
-        "Portal inmobiliario usado para extracción automática de publicaciones en venta en Pasto, Nariño."
-    )
-
-    cursor = connection.cursor()
-    cursor.execute(sql, values)
-    connection.commit()
-
-    fuente_id = cursor.lastrowid
-    cursor.close()
-
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo)
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,)
-        )
-
-    result = cursor.fetchone()
-    cursor.close()
-
-    return result[0] if result else None
-
-
-def insert_publicacion(connection, data):
-    sql = """
-        INSERT INTO publicaciones (
-            fuente_id,
-            codigo_externo,
-            link_origen,
-            links_adicionales,
-            coordenadas,
-            latitud,
-            longitud,
-            direccion,
-            ciudad,
-            barrio,
-            tipo_inmueble,
-            ph,
-            estrato,
-            descripcion,
-            precio,
-            m2,
-            m2_construido,
-            antiguedad,
-            pisos,
-            habitaciones,
-            banios,
-            parqueadero,
-            administracion,
-            notas
-        )
-        VALUES (
-            %(fuente_id)s,
-            %(codigo_externo)s,
-            %(link_origen)s,
-            %(links_adicionales)s,
-            %(coordenadas)s,
-            %(latitud)s,
-            %(longitud)s,
-            %(direccion)s,
-            %(ciudad)s,
-            %(barrio)s,
-            %(tipo_inmueble)s,
-            %(ph)s,
-            %(estrato)s,
-            %(descripcion)s,
-            %(precio)s,
-            %(m2)s,
-            %(m2_construido)s,
-            %(antiguedad)s,
-            %(pisos)s,
-            %(habitaciones)s,
-            %(banios)s,
-            %(parqueadero)s,
-            %(administracion)s,
-            %(notas)s
-        )
-    """
-
-    cursor = connection.cursor()
-    cursor.execute(sql, data)
-    connection.commit()
-
-    publicacion_id = cursor.lastrowid
-    cursor.close()
-
-    return publicacion_id
-
-
-def update_existing_coordinates(connection, publicacion_id, data):
-    if not data.get("coordenadas") and not (data.get("latitud") and data.get("longitud")):
-        return False
-
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        UPDATE publicaciones
-        SET
-            coordenadas = COALESCE(NULLIF(coordenadas, ''), %s),
-            latitud = COALESCE(latitud, %s),
-            longitud = COALESCE(longitud, %s)
-        WHERE id = %s
-          AND (
-              coordenadas IS NULL OR TRIM(coordenadas) = ''
-              OR latitud IS NULL
-              OR longitud IS NULL
-          )
-        """,
-        (
-            data.get("coordenadas"),
-            data.get("latitud"),
-            data.get("longitud"),
-            publicacion_id
-        )
-    )
-    connection.commit()
-    updated = cursor.rowcount > 0
-    cursor.close()
-
-    return updated
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo)
-    )
-
-    exists = cursor.fetchone()
-
-    if exists:
-        cursor.close()
-        return
-
-    hash_archivo = None
-
-    if ruta_archivo and Path(ruta_archivo).exists():
-        hash_archivo = file_hash(ruta_archivo)
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original, hash_archivo)
-    )
-
-    connection.commit()
-    cursor.close()
-
-
 # ==========================================================
 # EVIDENCIAS POR ID DE PUBLICACIÓN
 # ==========================================================
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    screenshot_dir = base_dir / "screenshots"
-
-    for folder in [html_dir, img_dir, screenshot_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    return html_dir, img_dir, screenshot_dir
-
-
-def save_html(html, codigo_archivo, publicacion_id):
-    html_dir, _, _ = get_publication_evidence_dirs(publicacion_id)
-
-    filename = f"fincaraiz_{sanitize_filename(codigo_archivo)}.html"
-    path = html_dir / filename
-
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(html)
-
-    return path
-
-
-def save_screenshot(page, codigo_archivo, publicacion_id):
-    _, _, screenshot_dir = get_publication_evidence_dirs(publicacion_id)
-
-    filename = f"fincaraiz_{sanitize_filename(codigo_archivo)}.png"
-    path = screenshot_dir / filename
-
-    try:
-        page.screenshot(path=str(path), full_page=True)
-        return path
-    except Exception as error:
-        print(f"[WARN] No se pudo guardar screenshot: {error}")
-        return None
-
 
 IMAGE_URL_COLLECTOR_JS = r"""
 containers => {
@@ -1056,7 +770,6 @@ containers => {
 }
 """
 
-
 def image_identity(image_url):
     match = re.search(r"_infocdn__([^/?#]+)", image_url, re.IGNORECASE)
 
@@ -1065,7 +778,6 @@ def image_identity(image_url):
 
     return image_url.lower()
 
-
 def image_resolution_score(image_url):
     match = re.search(r"(\d+)x(\d+)", image_url)
 
@@ -1073,7 +785,6 @@ def image_resolution_score(image_url):
         return 0
 
     return int(match.group(1)) * int(match.group(2))
-
 
 def normalize_image_urls(image_urls):
     cleaned = []
@@ -1123,7 +834,6 @@ def normalize_image_urls(image_urls):
 
     return cleaned
 
-
 def open_gallery(page):
     gallery_selectors = [
         "button:has-text('Galer')",
@@ -1146,7 +856,6 @@ def open_gallery(page):
             continue
 
     return False
-
 
 def collect_gallery_image_urls(page):
     gallery_selectors = (
@@ -1196,7 +905,6 @@ def collect_gallery_image_urls(page):
 
     return image_urls
 
-
 def collect_image_urls(page):
     try:
         page.evaluate("window.scrollTo(0, 0)")
@@ -1225,7 +933,6 @@ def collect_image_urls(page):
     print(f"[INFO] Fotos detectadas para descargar: {len(image_urls)}")
 
     return image_urls
-
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
@@ -1262,44 +969,12 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
         print(f"[WARN] No se pudo descargar imagen: {image_url} | {error}")
         return None
 
-
-def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
-    if not image_urls:
-        return []
-
-    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
-    downloaded = []
-
-    print(f"[INFO] Descargando {len(image_urls)} fotos con {workers} hilos")
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                download_image,
-                image_url,
-                codigo_archivo,
-                index,
-                publicacion_id
-            ): (index, image_url)
-            for index, image_url in enumerate(image_urls, start=1)
-        }
-
-        for future in as_completed(futures):
-            index, image_url = futures[future]
-
-            try:
-                image_path = future.result()
-            except Exception as error:
-                print(f"[WARN] No se pudo descargar imagen {index}: {error}")
-                continue
-
-            if image_path:
-                print(f"[OK] Foto descargada {index}/{len(image_urls)}")
-                downloaded.append((index, image_url, image_path))
-
-    downloaded.sort(key=lambda item: item[0])
-    return downloaded
-
+download_images_parallel = partial(
+    core_download_images_parallel,
+    download_image_func=download_image,
+    image_download_workers=IMAGE_DOWNLOAD_WORKERS,
+    label="fotos",
+)
 
 # ==========================================================
 # LINKS Y PAGINACIÓN FINCARAÍZ
@@ -1310,7 +985,6 @@ def build_search_page_url(page_number):
         return SEARCH_URL
 
     return f"{SEARCH_URL.rstrip('/')}/pagina{page_number}"
-
 
 def get_current_page_links(page):
     try:
@@ -1340,7 +1014,6 @@ def get_current_page_links(page):
 
     except Exception:
         return []
-
 
 def collect_publication_links(page):
     audit = ScraperAudit("FincaRaiz", SEARCH_URL)
@@ -1467,7 +1140,6 @@ def collect_publication_links(page):
 
     return list(all_links), audit
 
-
 # ==========================================================
 # EXTRACCIÓN DE CADA PUBLICACIÓN
 # ==========================================================
@@ -1593,13 +1265,13 @@ def extract_publication_data(page, url, fuente_id):
 
     return data, html, None
 
-
 # ==========================================================
 # PROCESO PRINCIPAL
 # ==========================================================
 
 def main():
     print("[INFO] Iniciando scraper Fincaraíz Pasto")
+    print("[INFO] Fuente revisada: Fincaraiz")
     print(f"[INFO] SEARCH_URL: {SEARCH_URL}")
     print(f"[INFO] HEADLESS: {HEADLESS}")
     print(f"[INFO] MAX_PAGES: {MAX_PAGES}")
@@ -1610,6 +1282,8 @@ def main():
     total_nuevas = 0
     total_saltadas = 0
     total_sin_precio = 0
+    total_no_venta = 0
+    total_sin_barrio = 0
     total_errores = 0
 
     with sync_playwright() as playwright:
@@ -1645,12 +1319,16 @@ def main():
                 data, html, skip_reason = extract_publication_data(page, link, fuente_id)
 
                 if not data:
-                    if skip_reason == "sin_precio":
+                    bucket = skip_bucket(skip_reason)
+                    if bucket == "sin_precio":
                         total_sin_precio += 1
-                        audit.record_omission("sin_precio", link)
+                    elif bucket == "no_venta":
+                        total_no_venta += 1
+                    elif bucket == "sin_barrio":
+                        total_sin_barrio += 1
                     else:
                         total_errores += 1
-                        audit.record_omission("sin_datos_extraidos", link)
+                    audit.record_omission(skip_reason or "sin_datos_extraidos", link)
                     continue
 
                 publicacion_existente_id = publicacion_existente_id_previo or publicacion_ya_existe(
@@ -1764,19 +1442,26 @@ def main():
     connection.close()
 
     print("\n[OK] Scraping finalizado.")
-    print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
-    print(f"[RESUMEN] Saltadas porque ya existían: {total_saltadas}")
-    print(f"[RESUMEN] Omitidas sin precio: {total_sin_precio}")
-    print(f"[RESUMEN] Errores: {total_errores}")
+    print_scraper_summary(
+        fuente="Fincaraiz",
+        total_encontrado=len(publication_links),
+        guardadas=total_nuevas,
+        descartadas_sin_precio=total_sin_precio,
+        descartadas_no_venta=total_no_venta,
+        descartadas_sin_barrio=total_sin_barrio,
+        duplicadas=total_saltadas,
+        errores=total_errores,
+    )
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
         omitidas_sin_precio=total_sin_precio,
+        omitidas_no_venta=total_no_venta,
+        omitidas_sin_barrio=total_sin_barrio,
         errores=total_errores,
     )
     audit.print_summary(len(publication_links))
     audit.save(len(publication_links))
-
 
 if __name__ == "__main__":
     main()

@@ -84,6 +84,13 @@ CREATE TABLE publicaciones (
         ON DELETE RESTRICT,
 
     UNIQUE KEY uq_link_origen (link_origen(500)),
+    KEY idx_publicaciones_fecha_captura (fecha_captura),
+    KEY idx_publicaciones_fuente_id (fuente_id),
+    KEY idx_publicaciones_barrio (barrio),
+    KEY idx_publicaciones_tipo_inmueble (tipo_inmueble),
+    KEY idx_publicaciones_precio (precio),
+    KEY idx_publicaciones_m2 (m2),
+    KEY idx_publicaciones_codigo_externo (codigo_externo),
 
     CONSTRAINT chk_precio CHECK (precio > 0),
     CONSTRAINT chk_m2 CHECK (m2 IS NULL OR m2 >= 0),

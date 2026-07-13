@@ -39,6 +39,8 @@ import {
   Building2,
   CalendarClock,
   Car,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ExternalLink,
   Eye,
@@ -56,6 +58,12 @@ import { toast } from "sonner"
 type Row = Record<string, any> & { id: number }
 type ImageItem = { name: string; src: string }
 type HtmlItem = { name: string; src: string }
+type PaginationInfo = {
+  page: number
+  pageSize: number
+  total: number
+  totalPages: number
+}
 
 function barrioLabel(value?: string | null) {
   return value?.trim() || "Sin barrio"
@@ -105,10 +113,12 @@ export function PublicacionesManagerPro({
   publicaciones,
   fuentes,
   hasActiveFilters,
+  pagination,
 }: {
   publicaciones: Row[]
   fuentes: Fuente[]
   hasActiveFilters: boolean
+  pagination?: PaginationInfo
 }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Row | null>(null)
@@ -124,6 +134,14 @@ export function PublicacionesManagerPro({
   const [toDelete, setToDelete] = useState<Row | null>(null)
   const [isPending, startTransition] = useTransition()
   const router = useRouter()
+  const pageInfo = pagination ?? {
+    page: 1,
+    pageSize: publicaciones.length || 50,
+    total: publicaciones.length,
+    totalPages: 1,
+  }
+  const firstVisible = pageInfo.total === 0 ? 0 : (pageInfo.page - 1) * pageInfo.pageSize + 1
+  const lastVisible = Math.min(pageInfo.page * pageInfo.pageSize, pageInfo.total)
 
   useEffect(() => {
     let active = true
@@ -248,13 +266,25 @@ export function PublicacionesManagerPro({
     window.open(htmlFile.src, "_blank", "noopener,noreferrer")
   }
 
+  function goToPage(nextPage: number) {
+    const page = Math.min(Math.max(1, nextPage), pageInfo.totalPages)
+    const params = new URLSearchParams(window.location.search)
+    params.set("page", String(page))
+    params.set("pageSize", String(pageInfo.pageSize))
+    router.push(`${window.location.pathname}?${params.toString()}`)
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="rounded-lg border border-slate-200/70 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/5">
-          <p className="text-sm font-semibold">{publicaciones.length} publicaciones visibles</p>
+          <p className="text-sm font-semibold">{pageInfo.total} publicaciones encontradas</p>
           <p className="text-xs text-muted-foreground">
-            {hasActiveFilters ? "Resultados filtrados desde el servidor." : "Inventario completo listo para analizar."}
+            {pageInfo.total > 0
+              ? `Mostrando ${firstVisible}-${lastVisible} de ${pageInfo.total}.`
+              : hasActiveFilters
+                ? "Resultados filtrados desde el servidor."
+                : "Inventario completo listo para analizar."}
           </p>
         </div>
         <Button onClick={openCreate} className="gap-2">
@@ -293,7 +323,7 @@ export function PublicacionesManagerPro({
               <p className="text-sm text-muted-foreground">Tabla compacta para comparar precio, ubicacion, fuente y caracteristicas.</p>
             </div>
             <Badge variant="outline" className="border-emerald-200 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300">
-              {publicaciones.length} registros
+              Pagina {pageInfo.page} de {pageInfo.totalPages}
             </Badge>
           </div>
           <div className="overflow-x-auto">
@@ -394,6 +424,35 @@ export function PublicacionesManagerPro({
                 ))}
               </TableBody>
             </Table>
+          </div>
+          <div className="flex flex-col gap-3 border-t px-4 py-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              {pageInfo.total > 0 ? `${firstVisible}-${lastVisible} de ${pageInfo.total}` : "0 publicaciones"}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => goToPage(pageInfo.page - 1)}
+                disabled={pageInfo.page <= 1}
+                className="gap-1"
+              >
+                <ChevronLeft className="size-4" />
+                Anterior
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => goToPage(pageInfo.page + 1)}
+                disabled={pageInfo.page >= pageInfo.totalPages}
+                className="gap-1"
+              >
+                Siguiente
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
           </div>
         </Card>
       )}

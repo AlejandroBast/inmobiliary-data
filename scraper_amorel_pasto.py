@@ -1,47 +1,58 @@
-import hashlib
-import html as html_module
 import json
 import os
 import re
 import time
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
-try:
-    import mysql.connector
-    from mysql.connector import IntegrityError
-except ImportError:
-    mysql = None
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    def load_dotenv():
-        return None
-
+from mysql.connector import IntegrityError
 from scraper_audit import ScraperAudit
+from functools import partial
 
-
-load_dotenv()
+from scrapers.core.config import get_db_config
+from scrapers.core.db import (
+    get_connection as core_get_connection,
+    get_or_create_fuente_id as core_get_or_create_fuente_id,
+    insert_evidencia,
+    insert_publicacion,
+    publicacion_ya_existe,
+)
+from scrapers.core.evidence import (
+    get_publication_evidence_dirs,
+    sanitize_filename,
+    save_html as core_save_html,
+    download_images_parallel as core_download_images_parallel,
+)
+from scrapers.core.stats import print_scraper_summary, skip_bucket
+from scrapers.core.normalizers import (
+    clean_text,
+    detect_ph as core_detect_ph,
+    extract_barrio as core_extract_barrio,
+    parse_area as core_parse_area,
+    parse_price as core_parse_price,
+    sale_status as core_sale_status,
+)
 
 SEARCH_URL = os.getenv(
     "AMOREL_SEARCH_URL",
     "https://amorelpasto.com/clasificados/web/app.php/resultados/Finca%20Raiz",
 )
 BASE_URL = "https://amorelpasto.com"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+DB_CONFIG = get_db_config()
+EVIDENCE_PREFIX = "amorel"
+get_connection = partial(core_get_connection, db_config=DB_CONFIG)
+get_or_create_fuente_id = partial(
+    core_get_or_create_fuente_id,
+    nombre="Amorel Pasto",
+    url_base=BASE_URL,
+    tipo_fuente="portal",
+    descripcion="Scraper de clasificados inmobiliarios en venta desde Amorel Pasto.",
+)
+save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
 
 # 0 = all pages detected from the Amorel pagination.
 MAX_PAGES = int(os.getenv("AMOREL_MAX_PAGES", "0"))
@@ -91,28 +102,17 @@ PROPERTY_TYPES = [
     ("Habitacion", ["HABITACION", "HABITACIONES", "ALCOBA"]),
 ]
 
-
-def clean_text(value):
-    if value is None:
-        return None
-    value = html_module.unescape(str(value))
-    value = re.sub(r"\s+", " ", value).strip()
-    return value if value else None
-
-
 def normalize_text(value):
     value = clean_text(value) or ""
     value = unicodedata.normalize("NFD", value)
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
     return value.upper()
 
-
 def safe_url(url):
     parts = urlsplit(url)
     path = quote(unquote(parts.path), safe="/%")
     query = quote(unquote(parts.query), safe="=&%")
     return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
-
 
 def fetch_url(url, timeout=45):
     request = Request(safe_url(url), headers={"User-Agent": USER_AGENT})
@@ -126,7 +126,6 @@ def fetch_url(url, timeout=45):
         if fallback.count("\ufffd") < text.count("\ufffd"):
             text = fallback
     return text, final_url
-
 
 class SimpleHTMLParser(HTMLParser):
     def __init__(self):
@@ -181,32 +180,25 @@ class SimpleHTMLParser(HTMLParser):
         raw = re.sub(r"[ \t]+", " ", raw)
         return raw.strip()
 
-
 def parse_html(html):
     parser = SimpleHTMLParser()
     parser.feed(html)
     return parser
 
-
 def get_lines(text):
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
-
-
 
 PUBLICATION_LINK_PATTERN = re.compile(
     r"/(?:publicacion|publicaciones|anuncio)/(\d+)(?:[/?#-]|$)",
     re.IGNORECASE,
 )
 
-
 def canonicalize_url(url):
     parts = urlsplit(url)
     return urlunsplit((parts.scheme, parts.netloc, parts.path.rstrip("/"), parts.query, ""))
 
-
 def is_amorel_url(url):
     return urlsplit(url).netloc.lower().endswith(urlsplit(BASE_URL).netloc.lower())
-
 
 def extract_publication_id(url):
     # Evita confundir las URLs de imagen /api/v1/anuncio/{id}/imagen con publicaciones.
@@ -215,10 +207,8 @@ def extract_publication_id(url):
     match = PUBLICATION_LINK_PATTERN.search(url)
     return match.group(1) if match else None
 
-
 def is_publication_url(url):
     return extract_publication_id(url) is not None
-
 
 def is_results_page_url(url):
     if not is_amorel_url(url):
@@ -234,7 +224,6 @@ def is_results_page_url(url):
         or "Finca Raiz" in unquote(url)
     )
 
-
 def build_page_url(page_number):
     if page_number <= 1:
         return SEARCH_URL
@@ -246,7 +235,6 @@ def build_page_url(page_number):
     else:
         query = f"{query}&pagina={page_number}" if query else f"pagina={page_number}"
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
-
 
 def collect_publication_links():
     """
@@ -401,14 +389,16 @@ def parse_money_digits(raw):
     except ValueError:
         return None
 
-
-
 def extract_price(text):
     """
     Amorel a veces muestra $0 en la tarjeta, pero el valor real aparece en
     "DETALLES DE LA PUBLICACION" como VALOR $ 165.000.000.
     Por eso SIEMPRE se calcula desde el detalle completo, no desde la tarjeta.
     """
+    core_price = core_parse_price(text)
+    if core_price and core_price >= MIN_SALE_PRICE:
+        return core_price
+
     candidates = []
     source = text or ""
     source_norm = normalize_text(source)
@@ -437,6 +427,11 @@ def extract_price(text):
     return max(candidates) if candidates else None
 
 def is_sale_listing(title, category, description):
+    sale_ok, sale_reason = core_sale_status(f"{title or ''}\n{category or ''}\n{description or ''}")
+    if not sale_ok:
+        return False, "no_es_venta_pura" if sale_reason == "no_venta" else sale_reason
+    return True, None
+
     title_category = normalize_text(f"{title or ''} {category or ''}")
     if any(keyword in title_category for keyword in NEGATIVE_TITLE_KEYWORDS):
         return False, "no_es_venta_pura"
@@ -450,14 +445,12 @@ def is_sale_listing(title, category, description):
 
     return False, "sin_palabra_venta"
 
-
 def extract_codigo(text, url):
     match = re.search(r"\bFSE\s*(\d+(?:-\d+)?)\b", text or "", re.IGNORECASE)
     if match:
         return f"FSE {match.group(1)}"
     publicacion_id = extract_publication_id(url)
     return f"AMOREL {publicacion_id}" if publicacion_id else None
-
 
 def extract_header(lines):
     for index, line in enumerate(lines):
@@ -508,7 +501,6 @@ def extract_header(lines):
 
     return title, date, category
 
-
 def extract_description(lines):
     start = None
     for index, line in enumerate(lines):
@@ -537,15 +529,12 @@ def extract_description(lines):
 
     return clean_text("\n".join(values))
 
-
 def extract_property_type(title, category, description):
     source = normalize_text(f"{title or ''} {category or ''} {description or ''}")
     for label, keywords in PROPERTY_TYPES:
         if any(keyword in source for keyword in keywords):
             return label
     return None
-
-
 
 SPANISH_SMALL_NUMBERS = {
     "UN": 1,
@@ -562,7 +551,6 @@ SPANISH_SMALL_NUMBERS = {
     "DIEZ": 10,
 }
 
-
 def parse_small_int(value):
     if value is None:
         return None
@@ -570,7 +558,6 @@ def parse_small_int(value):
     if value_norm.isdigit():
         return int(value_norm)
     return SPANISH_SMALL_NUMBERS.get(value_norm)
-
 
 def smart_title(value):
     value = clean_text(value)
@@ -597,7 +584,6 @@ def smart_title(value):
         result = result.replace(old, new)
     return result or None
 
-
 def clean_extracted_name(value):
     value = normalize_text(value)
     value = re.sub(r"^[\s\-:]+", "", value)
@@ -617,7 +603,6 @@ def clean_extracted_name(value):
     if len(value) <= 1:
         return None
     return smart_title(value)
-
 
 def extract_conjunto_edificio(title, description):
     source = "\n".join(value for value in [title, description] if value)
@@ -639,7 +624,6 @@ def extract_conjunto_edificio(title, description):
                     return name
 
     return None
-
 
 def extract_ph_value(text, edificio_conjunto=None):
     source = normalize_text(text)
@@ -663,8 +647,6 @@ def extract_ph_value(text, edificio_conjunto=None):
         return 1
 
     return None
-
-
 
 def extract_barrio(title, description):
     """
@@ -701,8 +683,6 @@ def extract_city(title, description):
         return "El Encano"
     return "Pasto"
 
-
-
 def extract_area(text):
     source = normalize_text(text or "")
     patterns = [
@@ -716,8 +696,7 @@ def extract_area(text):
                 return float(match.group(1).replace(",", "."))
             except ValueError:
                 continue
-    return None
-
+    return core_parse_area(text)
 
 def extract_count(text, patterns):
     source = normalize_text(text or "")
@@ -729,10 +708,8 @@ def extract_count(text, patterns):
                 return value
     return None
 
-
 def number_pattern():
     return r"(\d+|UN|UNA|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE|OCHO|NUEVE|DIEZ)"
-
 
 def extract_habitaciones(text):
     n = number_pattern()
@@ -744,7 +721,6 @@ def extract_habitaciones(text):
         ],
     )
 
-
 def extract_banios(text):
     n = number_pattern()
     return extract_count(
@@ -754,7 +730,6 @@ def extract_banios(text):
             rf"(?:BAÑOS?|BANOS?|BA\S*OS?)\s*[:\-]?\s*{n}",
         ],
     )
-
 
 def extract_parqueaderos(text):
     n = number_pattern()
@@ -773,7 +748,6 @@ def extract_parqueaderos(text):
 
     return None
 
-
 def extract_administracion(text):
     source = normalize_text(text or "")
     patterns = [
@@ -787,7 +761,6 @@ def extract_administracion(text):
             if value and value > 0:
                 return value
     return None
-
 
 def extract_antiguedad(text):
     source = normalize_text(text or "")
@@ -827,12 +800,10 @@ def extract_images(parser, page_url):
 
     return image_urls
 
-
 LOCATION_STOP = (
     r"(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+PRECIO|\s+PASTO|"
     r"\s+FSE|\s+INF|\s+INFORMES|\s+CON\s|\s+TIENE\s|\s+NEGOCIABLES|$)"
 )
-
 
 def clean_extracted_name(value):
     value = normalize_text(value)
@@ -852,7 +823,6 @@ def clean_extracted_name(value):
     if len(value) <= 1:
         return None
     return smart_title(value)
-
 
 def extract_conjunto_edificio(title, description):
     source = "\n".join(value for value in [title, description] if value)
@@ -877,7 +847,6 @@ def extract_conjunto_edificio(title, description):
                     return name
 
     return None
-
 
 def extract_ph_value(text, edificio_conjunto=None):
     source = normalize_text(text)
@@ -904,11 +873,14 @@ def extract_ph_value(text, edificio_conjunto=None):
     if any(keyword in f" {source} " for keyword in ph_keywords):
         return "Si"
 
-    return None
-
+    return core_detect_ph(text)
 
 def extract_barrio(title, description):
     source = "\n".join(value for value in [title, description] if value)
+    core_barrio = core_extract_barrio(source)
+    if core_barrio:
+        return core_barrio
+
     patterns = [
         rf"\bBARRIO\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
         rf"\bSECTOR\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
@@ -926,7 +898,6 @@ def extract_barrio(title, description):
                     return barrio
 
     return None
-
 
 def extract_location_hint(title, description, edificio_conjunto=None):
     if edificio_conjunto:
@@ -952,7 +923,6 @@ def extract_location_hint(title, description, edificio_conjunto=None):
 
     return None
 
-
 def extract_title_from_description(description):
     if not description:
         return None
@@ -965,8 +935,6 @@ def extract_title_from_description(description):
         flags=re.IGNORECASE,
     )[0]
     return clean_text(source)
-
-
 
 def extract_publication_data(url):
     print(f"[INFO] Extrayendo publicacion Amorel: {url}")
@@ -1048,179 +1016,6 @@ def extract_publication_data(url):
     }
     return data, html, image_urls, None
 
-def get_connection():
-    if mysql is None:
-        raise RuntimeError("mysql-connector-python no esta instalado.")
-    return mysql.connector.connect(**DB_CONFIG)
-
-
-def get_or_create_fuente_id(connection):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-        """,
-        (
-            "Amorel Pasto",
-            BASE_URL,
-            "portal",
-            "Scraper de clasificados inmobiliarios en venta desde Amorel Pasto",
-        ),
-    )
-    connection.commit()
-    fuente_id = cursor.lastrowid
-    cursor.close()
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,),
-        )
-    result = cursor.fetchone()
-    cursor.close()
-    return result[0] if result else None
-
-
-def insert_publicacion(connection, data):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO publicaciones (
-            fuente_id, codigo_externo, link_origen, links_adicionales,
-            coordenadas, latitud, longitud, direccion, ciudad, barrio,
-            tipo_inmueble, ph, estrato, descripcion, precio, m2,
-            m2_construido, antiguedad, pisos, habitaciones, banios,
-            parqueadero, administracion, notas
-        )
-        VALUES (
-            %(fuente_id)s, %(codigo_externo)s, %(link_origen)s, %(links_adicionales)s,
-            %(coordenadas)s, %(latitud)s, %(longitud)s, %(direccion)s, %(ciudad)s, %(barrio)s,
-            %(tipo_inmueble)s, %(ph)s, %(estrato)s, %(descripcion)s, %(precio)s, %(m2)s,
-            %(m2_construido)s, %(antiguedad)s, %(pisos)s, %(habitaciones)s, %(banios)s,
-            %(parqueadero)s, %(administracion)s, %(notas)s
-        )
-        """,
-        data,
-    )
-    connection.commit()
-    publicacion_id = cursor.lastrowid
-    cursor.close()
-    return publicacion_id
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo),
-    )
-    if cursor.fetchone():
-        cursor.close()
-        return
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion
-        (publicacion_id, tipo, ruta_archivo, url_original, hash_archivo)
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original, file_hash(ruta_archivo)),
-    )
-    connection.commit()
-    cursor.close()
-
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    for folder in [html_dir, img_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-    return html_dir, img_dir
-
-
-def sanitize_filename(value):
-    value = clean_text(value) or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", value)
-    return value[:120]
-
-
-def file_hash(path):
-    if not path or not Path(path).exists():
-        return None
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
-
-
-def make_standalone_html(html, page_url):
-    if not page_url:
-        return html
-
-    base_tag = f'<base href="{html_module.escape(page_url, quote=True)}">'
-    meta_tag = '<meta charset="utf-8">'
-
-    if re.search(r"<base\b", html or "", flags=re.IGNORECASE):
-        html_with_base = html
-    elif re.search(r"<head[^>]*>", html or "", flags=re.IGNORECASE):
-        html_with_base = re.sub(
-            r"(<head[^>]*>)",
-            rf"\1\n{meta_tag}\n{base_tag}",
-            html,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    else:
-        html_with_base = f"<!doctype html><html><head>{meta_tag}{base_tag}</head><body>{html}</body></html>"
-
-    return html_with_base
-
-
-def save_html(html, codigo_archivo, publicacion_id, page_url=None):
-    html_dir, _ = get_publication_evidence_dirs(publicacion_id)
-    path = html_dir / f"amorel_{sanitize_filename(codigo_archivo)}.html"
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(make_standalone_html(html, page_url))
-    return path
-
-
 def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir = get_publication_evidence_dirs(publicacion_id)
     filename = f"amorel_{sanitize_filename(codigo_archivo)}_{index:02d}.jpg"
@@ -1238,31 +1033,16 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
         print(f"[WARN] No se pudo descargar imagen {image_url}: {error}")
         return None
 
-
-def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
-    if not image_urls:
-        return []
-
-    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
-    downloaded = []
-    print(f"[INFO] Descargando {len(image_urls)} imagenes Amorel con {workers} hilos")
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(download_image, image_url, codigo_archivo, index, publicacion_id): (index, image_url)
-            for index, image_url in enumerate(image_urls, start=1)
-        }
-        for future in as_completed(futures):
-            index, image_url = futures[future]
-            image_path = future.result()
-            if image_path:
-                downloaded.append((index, image_url, image_path))
-                print(f"[OK] Imagen descargada {index}/{len(image_urls)}")
-    downloaded.sort(key=lambda item: item[0])
-    return downloaded
-
+download_images_parallel = partial(
+    core_download_images_parallel,
+    download_image_func=download_image,
+    image_download_workers=IMAGE_DOWNLOAD_WORKERS,
+    label="imagenes Amorel",
+)
 
 def main():
     print("[INFO] Iniciando scraper Amorel Pasto")
+    print("[INFO] Fuente revisada: Amorel Pasto")
     print(f"[INFO] SEARCH_URL: {SEARCH_URL}")
     print(f"[INFO] AMOREL_MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
     print(f"[INFO] AMOREL_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
@@ -1276,6 +1056,9 @@ def main():
     total_nuevas = 0
     total_saltadas = 0
     total_omitidas = 0
+    total_sin_precio = 0
+    total_no_venta = 0
+    total_sin_barrio = 0
     total_errores = 0
 
     for index, link in enumerate(publication_links, start=1):
@@ -1285,6 +1068,15 @@ def main():
             data, html, image_urls, skip_reason = extract_publication_data(link)
             if not data:
                 total_omitidas += 1
+                bucket = skip_bucket(skip_reason)
+                if bucket == "sin_precio":
+                    total_sin_precio += 1
+                elif bucket == "no_venta":
+                    total_no_venta += 1
+                elif bucket == "sin_barrio":
+                    total_sin_barrio += 1
+                else:
+                    total_errores += 1
                 audit.record_omission(skip_reason or "sin_datos_extraidos", link)
                 continue
 
@@ -1354,19 +1146,27 @@ def main():
     connection.close()
 
     print("\n[OK] Scraping Amorel finalizado.")
-    print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
-    print(f"[RESUMEN] Saltadas porque ya existian: {total_saltadas}")
-    print(f"[RESUMEN] Omitidas por filtro/precio: {total_omitidas}")
-    print(f"[RESUMEN] Errores: {total_errores}")
+    print_scraper_summary(
+        fuente="Amorel Pasto",
+        total_encontrado=len(publication_links),
+        guardadas=total_nuevas,
+        descartadas_sin_precio=total_sin_precio,
+        descartadas_no_venta=total_no_venta,
+        descartadas_sin_barrio=total_sin_barrio,
+        duplicadas=total_saltadas,
+        errores=total_errores,
+    )
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
         omitidas=total_omitidas,
+        omitidas_sin_precio=total_sin_precio,
+        omitidas_no_venta=total_no_venta,
+        omitidas_sin_barrio=total_sin_barrio,
         errores=total_errores,
     )
     audit.print_summary(len(publication_links))
     audit.save(len(publication_links))
-
 
 if __name__ == "__main__":
     main()

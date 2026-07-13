@@ -5,7 +5,7 @@ import mysql from "mysql2/promise"
 import * as schema from "./schema"
 
 function loadRootEnv() {
-	const rootEnvPath = join(process.cwd(), "..", ".env")
+	const rootEnvPath = join(process.cwd(), "..", ".env.local")
 	if (!existsSync(rootEnvPath)) return
 
 	for (const line of readFileSync(rootEnvPath, "utf8").split(/\r?\n/)) {

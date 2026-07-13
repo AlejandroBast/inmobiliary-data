@@ -20,7 +20,12 @@ export type PublicacionFilters = {
   m2Max?: string | null
   phTipo?: string | null
   parqueadero?: string | null
+  page?: string | null
+  pageSize?: string | null
 }
+
+const DEFAULT_PAGE_SIZE = 50
+const MAX_PAGE_SIZE = 100
 
 export type PublicacionInput = {
   fuenteId: number
@@ -172,7 +177,7 @@ function isValidDate(value: string) {
 }
 
 // READ
-export async function getPublicaciones(filters: PublicacionFilters = {}) {
+function buildPublicacionConditions(filters: PublicacionFilters = {}) {
   const conditions = [] as Array<ReturnType<typeof sql>>
 
   const id = cleanFilter(filters.id)
@@ -265,7 +270,25 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     }
   }
 
-  const query = db
+  return conditions
+}
+
+function parsePagination(filters: PublicacionFilters = {}) {
+  const parsedPage = Number.parseInt(cleanFilter(filters.page) ?? "1", 10)
+  const parsedPageSize = Number.parseInt(cleanFilter(filters.pageSize) ?? String(DEFAULT_PAGE_SIZE), 10)
+  const page = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1
+  const pageSize = Math.min(
+    MAX_PAGE_SIZE,
+    Math.max(1, Number.isFinite(parsedPageSize) && parsedPageSize > 0 ? parsedPageSize : DEFAULT_PAGE_SIZE),
+  )
+  return { page, pageSize, offset: (page - 1) * pageSize }
+}
+
+export async function getPublicaciones(filters: PublicacionFilters = {}) {
+  const conditions = buildPublicacionConditions(filters)
+  const { page, pageSize, offset } = parsePagination(filters)
+
+  const rows = await db
     .select({
       id: publicaciones.id,
       fuenteId: publicaciones.fuenteId,
@@ -301,8 +324,18 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     .leftJoin(fuentesInmobiliarias, eq(publicaciones.fuenteId, fuentesInmobiliarias.id))
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(publicaciones.fechaCaptura))
+    .limit(pageSize)
+    .offset(offset)
 
-  return query
+  const total = await getPublicacionesTotal(filters)
+
+  return {
+    data: rows,
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  }
 }
 
 function normalizeStoredLinks(input: PublicacionLinkValidationInput) {
@@ -389,12 +422,14 @@ export async function validatePublicacionLinks(
   )
 }
 
-export async function getPublicacionesTotal() {
+export async function getPublicacionesTotal(filters: PublicacionFilters = {}) {
+  const conditions = buildPublicacionConditions(filters)
   const [row] = await db
     .select({
       total: sql<number>`COUNT(*)`,
     })
     .from(publicaciones)
+    .where(conditions.length > 0 ? and(...conditions) : undefined)
 
   return Number(row?.total ?? 0)
 }

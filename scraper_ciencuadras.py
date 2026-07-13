@@ -3,36 +3,52 @@ import re
 import json
 import time
 import math
-import hashlib
 import requests
-import mysql.connector
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urljoin
-from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from scraper_audit import ScraperAudit
+from functools import partial
 
+from scrapers.core.config import get_db_config
+from scrapers.core.db import (
+    get_connection as core_get_connection,
+    get_or_create_fuente_id as core_get_or_create_fuente_id,
+    insert_evidencia,
+    insert_publicacion,
+    publicacion_ya_existe,
+)
+from scrapers.core.evidence import (
+    get_publication_evidence_dirs,
+    sanitize_filename,
+    save_html as core_save_html,
+    save_screenshot as core_save_screenshot,
+    download_images_parallel as core_download_images_parallel,
+)
+from scrapers.core.stats import print_scraper_summary, skip_bucket
+from scrapers.core.normalizers import clean_text
 
 # ==========================================================
 # CONFIGURACIÓN GENERAL
 # ==========================================================
 
-load_dotenv()
-
 SEARCH_URL = "https://www.ciencuadras.com/venta/pasto"
 BASE_URL = "https://www.ciencuadras.com"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+DB_CONFIG = get_db_config()
+EVIDENCE_PREFIX = "ciencuadras"
+get_connection = partial(core_get_connection, db_config=DB_CONFIG)
+get_or_create_fuente_id = partial(
+    core_get_or_create_fuente_id,
+    nombre="Ciencuadras",
+    url_base=BASE_URL,
+    tipo_fuente="portal",
+    descripcion="Portal inmobiliario usado para extraccion automatica de publicaciones en venta en Pasto.",
+)
+save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
+save_screenshot = partial(core_save_screenshot, prefix=EVIDENCE_PREFIX)
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas.
@@ -56,20 +72,9 @@ REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "0.4"))
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
-
 # ==========================================================
 # UTILIDADES
 # ==========================================================
-
-def clean_text(value):
-    if not value:
-        return None
-
-    value = re.sub(r"\s+", " ", str(value))
-    value = value.strip()
-
-    return value if value else None
-
 
 def only_digits(value):
     if not value:
@@ -77,7 +82,6 @@ def only_digits(value):
 
     digits = re.sub(r"[^\d]", "", str(value))
     return int(digits) if digits else None
-
 
 def parse_decimal(value):
     if not value:
@@ -94,7 +98,6 @@ def parse_decimal(value):
     except ValueError:
         return None
 
-
 def parse_int(value):
     if value is None:
         return None
@@ -102,29 +105,11 @@ def parse_int(value):
     match = re.search(r"\d+", str(value))
     return int(match.group()) if match else None
 
-
-def sanitize_filename(value):
-    value = value or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", str(value))
-    return value[:120]
-
-
-def file_hash(path):
-    sha256 = hashlib.sha256()
-
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(8192), b""):
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
-
-
 def get_lines(text):
     if not text:
         return []
 
     return [line.strip() for line in text.splitlines() if line.strip()]
-
 
 def value_after_label(lines, label):
     label_lower = label.lower().replace(":", "").strip()
@@ -146,7 +131,6 @@ def value_after_label(lines, label):
                     return next_line
 
     return None
-
 
 def extract_section(lines, start_label, stop_labels):
     start_index = None
@@ -171,7 +155,6 @@ def extract_section(lines, start_label, stop_labels):
 
     return clean_text(" ".join(content))
 
-
 # ==========================================================
 # EXTRACCIÓN DE DATOS
 # ==========================================================
@@ -187,7 +170,6 @@ TIPOS_INMUEBLE = [
     "Consultorio",
     "Finca"
 ]
-
 
 def extract_title_parts(title):
     """
@@ -213,7 +195,6 @@ def extract_title_parts(title):
 
     return tipo_inmueble, barrio
 
-
 def extract_total_results(text):
     if not text:
         return None
@@ -229,7 +210,6 @@ def extract_total_results(text):
         return only_digits(match.group(1))
 
     return None
-
 
 def extract_result_window(text):
     if not text:
@@ -253,7 +233,6 @@ def extract_result_window(text):
 
     return None
 
-
 def extract_codigo(text):
     if not text:
         return None
@@ -271,7 +250,6 @@ def extract_codigo(text):
             return clean_text(match.group(1))
 
     return None
-
 
 def extract_precio(text):
     if not text:
@@ -291,7 +269,6 @@ def extract_precio(text):
 
     return None
 
-
 def extract_number_by_keywords(text, keywords):
     if not text:
         return None
@@ -309,7 +286,6 @@ def extract_number_by_keywords(text, keywords):
                 return int(match.group(1))
 
     return None
-
 
 def extract_location(lines, title=None, text=None):
     _, title_barrio = extract_title_parts(title)
@@ -371,7 +347,6 @@ def extract_location(lines, title=None, text=None):
 
     return "Pasto", None, "Pasto, Nariño"
 
-
 def extract_coordinates_from_source(html, text):
     """
     Solo extrae coordenadas si la publicación o el HTML las proporciona.
@@ -415,7 +390,6 @@ def extract_coordinates_from_source(html, text):
 
     return None, None, None
 
-
 def extract_tipo_inmueble(title, text):
     title_tipo, _ = extract_title_parts(title)
 
@@ -429,7 +403,6 @@ def extract_tipo_inmueble(title, text):
             return tipo
 
     return None
-
 
 def extract_ph(description):
     if not description:
@@ -450,7 +423,6 @@ def extract_ph(description):
 
     return None
 
-
 def extract_pisos(description):
     if not description:
         return None
@@ -462,7 +434,6 @@ def extract_pisos(description):
     )
 
     return int(match.group(1)) if match else None
-
 
 def extract_administracion(text):
     if not text:
@@ -479,241 +450,13 @@ def extract_administracion(text):
 
     return None
 
-
 # ==========================================================
 # BASE DE DATOS
 # ==========================================================
 
-def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
-
-
-def get_or_create_fuente_id(connection):
-    sql = """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE
-    """
-
-    values = (
-        "Ciencuadras",
-        "https://www.ciencuadras.com",
-        "portal",
-        "Portal inmobiliario usado para extracción automática de publicaciones en Pasto."
-    )
-
-    cursor = connection.cursor()
-    cursor.execute(sql, values)
-    connection.commit()
-
-    fuente_id = cursor.lastrowid
-    cursor.close()
-
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen):
-    """
-    Verifica si la publicación ya existe en la base de datos.
-    Si existe, se salta completamente.
-    """
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM publicaciones
-        WHERE link_origen = %s
-        LIMIT 1
-        """,
-        (link_origen,)
-    )
-
-    result = cursor.fetchone()
-    cursor.close()
-
-    return result[0] if result else None
-
-
-def insert_publicacion(connection, data):
-    """
-    Inserta solo publicaciones nuevas.
-    No actualiza publicaciones existentes.
-    No inserta precio_m2 ni precio_m2_construido porque MySQL los calcula solo.
-    """
-
-    sql = """
-        INSERT INTO publicaciones (
-            fuente_id,
-            codigo_externo,
-            link_origen,
-            links_adicionales,
-            coordenadas,
-            latitud,
-            longitud,
-            direccion,
-            ciudad,
-            barrio,
-            tipo_inmueble,
-            ph,
-            estrato,
-            descripcion,
-            precio,
-            m2,
-            m2_construido,
-            antiguedad,
-            pisos,
-            habitaciones,
-            banios,
-            parqueadero,
-            administracion,
-            notas
-        )
-        VALUES (
-            %(fuente_id)s,
-            %(codigo_externo)s,
-            %(link_origen)s,
-            %(links_adicionales)s,
-            %(coordenadas)s,
-            %(latitud)s,
-            %(longitud)s,
-            %(direccion)s,
-            %(ciudad)s,
-            %(barrio)s,
-            %(tipo_inmueble)s,
-            %(ph)s,
-            %(estrato)s,
-            %(descripcion)s,
-            %(precio)s,
-            %(m2)s,
-            %(m2_construido)s,
-            %(antiguedad)s,
-            %(pisos)s,
-            %(habitaciones)s,
-            %(banios)s,
-            %(parqueadero)s,
-            %(administracion)s,
-            %(notas)s
-        )
-    """
-
-    cursor = connection.cursor()
-    cursor.execute(sql, data)
-    connection.commit()
-
-    publicacion_id = cursor.lastrowid
-    cursor.close()
-
-    return publicacion_id
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo)
-    )
-
-    exists = cursor.fetchone()
-
-    if exists:
-        cursor.close()
-        return
-
-    hash_archivo = None
-
-    if ruta_archivo and Path(ruta_archivo).exists():
-        hash_archivo = file_hash(ruta_archivo)
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-    )
-
-    connection.commit()
-    cursor.close()
-
-
 # ==========================================================
 # EVIDENCIAS POR ID DE PUBLICACIÓN
 # ==========================================================
-
-def get_publication_evidence_dirs(publicacion_id):
-    """
-    Crea carpetas separadas por ID de publicación.
-
-    Ejemplo:
-    evidencias/publicacion_1/html
-    evidencias/publicacion_1/imagenes
-    evidencias/publicacion_1/screenshots
-    """
-
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    screenshot_dir = base_dir / "screenshots"
-
-    for folder in [html_dir, img_dir, screenshot_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    return html_dir, img_dir, screenshot_dir
-
-
-def save_html(html, codigo_archivo, publicacion_id):
-    html_dir, _, _ = get_publication_evidence_dirs(publicacion_id)
-
-    filename = f"ciencuadras_{sanitize_filename(codigo_archivo)}.html"
-    path = html_dir / filename
-
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(html)
-
-    return path
-
-
-def save_screenshot(page, codigo_archivo, publicacion_id):
-    _, _, screenshot_dir = get_publication_evidence_dirs(publicacion_id)
-
-    filename = f"ciencuadras_{sanitize_filename(codigo_archivo)}.png"
-    path = screenshot_dir / filename
-
-    try:
-        page.screenshot(path=str(path), full_page=True)
-        return path
-    except Exception as error:
-        print(f"[WARN] No se pudo guardar screenshot: {error}")
-        return None
-
 
 GALLERY_SELECTORS = (
     ".carousel-gallery, "
@@ -833,7 +576,6 @@ containers => {
 }
 """
 
-
 def normalize_image_urls(image_urls):
     cleaned = []
 
@@ -861,7 +603,6 @@ def normalize_image_urls(image_urls):
 
     return cleaned
 
-
 def collect_image_urls_from_selectors(page, selectors):
     try:
         image_urls = page.eval_on_selector_all(
@@ -872,7 +613,6 @@ def collect_image_urls_from_selectors(page, selectors):
         return normalize_image_urls(image_urls)
     except Exception:
         return []
-
 
 def click_open_full_gallery(page):
     try:
@@ -928,7 +668,6 @@ def click_open_full_gallery(page):
         )
     except Exception:
         return False
-
 
 def click_next_gallery_image(page):
     try:
@@ -986,7 +725,6 @@ def click_next_gallery_image(page):
     except Exception:
         return False
 
-
 def collect_full_gallery_image_urls(page):
     image_urls = []
 
@@ -1023,7 +761,6 @@ def collect_full_gallery_image_urls(page):
 
     return normalize_image_urls(image_urls)
 
-
 def collect_image_urls(page):
     try:
         page.locator(".carousel-gallery").first.scroll_into_view_if_needed(timeout=5000)
@@ -1044,7 +781,6 @@ def collect_image_urls(page):
     print(f"[INFO] Total fotos detectadas para descargar: {len(image_urls)}")
 
     return image_urls
-
 
 def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
@@ -1081,45 +817,12 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
         print(f"[WARN] No se pudo descargar imagen: {image_url} | {error}")
         return None
 
-
-def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
-    if not image_urls:
-        return []
-
-    workers = max(1, min(IMAGE_DOWNLOAD_WORKERS, len(image_urls)))
-    downloaded = []
-
-    print(f"[INFO] Descargando {len(image_urls)} fotos con {workers} hilos")
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                download_image,
-                image_url,
-                codigo_archivo,
-                index,
-                publicacion_id
-            ): (index, image_url)
-            for index, image_url in enumerate(image_urls, start=1)
-        }
-
-        for future in as_completed(futures):
-            index, image_url = futures[future]
-
-            try:
-                image_path = future.result()
-            except Exception as error:
-                print(f"[WARN] No se pudo descargar imagen {index}: {error}")
-                continue
-
-            if image_path:
-                print(f"[OK] Foto descargada {index}/{len(image_urls)}")
-                downloaded.append((index, image_url, image_path))
-
-    downloaded.sort(key=lambda item: item[0])
-
-    return downloaded
-
+download_images_parallel = partial(
+    core_download_images_parallel,
+    download_image_func=download_image,
+    image_download_workers=IMAGE_DOWNLOAD_WORKERS,
+    label="fotos",
+)
 
 # ==========================================================
 # PAGINACIÓN Y LINKS
@@ -1142,11 +845,9 @@ def get_current_page_links(page):
     except Exception:
         return []
 
-
 def links_signature(page):
     links = get_current_page_links(page)
     return "|".join(sorted(links))
-
 
 def wait_for_links_change(page, old_signature, timeout_seconds=12):
     start = time.time()
@@ -1160,7 +861,6 @@ def wait_for_links_change(page, old_signature, timeout_seconds=12):
             return True
 
     return False
-
 
 def click_pagination_number(page, page_number):
     old_signature = links_signature(page)
@@ -1276,7 +976,6 @@ def click_pagination_number(page, page_number):
 
     return False
 
-
 def click_next_page(page):
     old_signature = links_signature(page)
 
@@ -1343,7 +1042,6 @@ def click_next_page(page):
         pass
 
     return False
-
 
 def collect_publication_links(page):
     audit = ScraperAudit("Ciencuadras", SEARCH_URL)
@@ -1472,7 +1170,6 @@ def collect_publication_links(page):
 
     return list(all_links), audit
 
-
 # ==========================================================
 # EXTRACCIÓN DE CADA PUBLICACIÓN
 # ==========================================================
@@ -1598,13 +1295,13 @@ def extract_publication_data(page, url, fuente_id):
 
     return data, html
 
-
 # ==========================================================
 # PROCESO PRINCIPAL
 # ==========================================================
 
 def main():
     print("[INFO] Iniciando scraper Ciencuadras Pasto")
+    print("[INFO] Fuente revisada: Ciencuadras")
     print(f"[INFO] HEADLESS: {HEADLESS}")
     print(f"[INFO] MAX_PAGES: {MAX_PAGES}")
 
@@ -1613,6 +1310,9 @@ def main():
 
     total_nuevas = 0
     total_saltadas = 0
+    total_sin_precio = 0
+    total_no_venta = 0
+    total_sin_barrio = 0
     total_errores = 0
 
     with sync_playwright() as playwright:
@@ -1650,7 +1350,7 @@ def main():
                 data, html = extract_publication_data(page, link, fuente_id)
 
                 if not data:
-                    total_errores += 1
+                    total_sin_precio += 1
                     audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
@@ -1741,17 +1441,26 @@ def main():
     connection.close()
 
     print("\n[OK] Scraping finalizado.")
-    print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
-    print(f"[RESUMEN] Saltadas porque ya existían: {total_saltadas}")
-    print(f"[RESUMEN] Errores u omitidas: {total_errores}")
+    print_scraper_summary(
+        fuente="Ciencuadras",
+        total_encontrado=len(publication_links),
+        guardadas=total_nuevas,
+        descartadas_sin_precio=total_sin_precio,
+        descartadas_no_venta=total_no_venta,
+        descartadas_sin_barrio=total_sin_barrio,
+        duplicadas=total_saltadas,
+        errores=total_errores,
+    )
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
-        errores_u_omitidas=total_errores,
+        omitidas_sin_precio=total_sin_precio,
+        omitidas_no_venta=total_no_venta,
+        omitidas_sin_barrio=total_sin_barrio,
+        errores=total_errores,
     )
     audit.print_summary(len(publication_links))
     audit.save(len(publication_links))
-
 
 if __name__ == "__main__":
     main()

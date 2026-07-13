@@ -1,5 +1,3 @@
-import hashlib
-import html as html_module
 import json
 import os
 import re
@@ -9,19 +7,7 @@ from pathlib import Path
 from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
-try:
-    import mysql.connector
-    from mysql.connector import IntegrityError
-except ImportError:
-    mysql = None
-    IntegrityError = Exception
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    def load_dotenv():
-        return None
-
+from mysql.connector import IntegrityError
 try:
     from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
     from playwright.sync_api import sync_playwright
@@ -30,20 +16,44 @@ except ImportError:
     sync_playwright = None
 
 from scraper_audit import ScraperAudit
+from functools import partial
 
-
-load_dotenv()
+from scrapers.core.config import get_db_config
+from scrapers.core.db import (
+    get_connection as core_get_connection,
+    get_or_create_fuente_id as core_get_or_create_fuente_id,
+    insert_evidencia,
+    insert_publicacion,
+    publicacion_ya_existe,
+)
+from scrapers.core.evidence import (
+    get_publication_evidence_dirs,
+    sanitize_filename,
+    save_html as core_save_html,
+)
+from scrapers.core.stats import print_scraper_summary, skip_bucket
+from scrapers.core.normalizers import (
+    clean_text,
+    detect_ph as core_detect_ph,
+    extract_barrio as core_extract_barrio,
+    parse_area as core_parse_area,
+    parse_price as core_parse_price,
+    sale_status as core_sale_status,
+)
 
 BASE_URL = "https://www.facebook.com"
 SOURCE_NAME = "Facebook Marketplace"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3301")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "Nico123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+DB_CONFIG = get_db_config()
+EVIDENCE_PREFIX = "facebook"
+get_connection = partial(core_get_connection, db_config=DB_CONFIG)
+get_or_create_fuente_id = partial(
+    core_get_or_create_fuente_id,
+    nombre="Facebook Marketplace",
+    url_base="https://www.facebook.com/marketplace/",
+    tipo_fuente="marketplace",
+    descripcion="Scraper de inmuebles en venta en Pasto desde Facebook Marketplace.",
+)
+save_html = partial(core_save_html, prefix=EVIDENCE_PREFIX)
 
 DEFAULT_SEARCH_PHRASES = [
     "venta casa pasto",
@@ -195,28 +205,17 @@ LISTING_STOP_MARKERS = [
     "MORE FROM THIS SELLER",
 ]
 
-
 def split_env_list(value):
     if not value:
         return []
     parts = re.split(r"[\n;|]+", value)
     return [part.strip() for part in parts if part.strip()]
 
-
-def clean_text(value):
-    if value is None:
-        return None
-    value = html_module.unescape(str(value))
-    value = re.sub(r"\s+", " ", value).strip()
-    return value if value else None
-
-
 def normalize_text(value):
     value = clean_text(value) or ""
     value = unicodedata.normalize("NFD", value)
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
     return value.upper()
-
 
 def get_lines(text):
     lines = []
@@ -226,10 +225,8 @@ def get_lines(text):
             lines.append(line)
     return lines
 
-
 def get_search_phrases():
     return split_env_list(os.getenv("FACEBOOK_SEARCH_PHRASES")) or DEFAULT_SEARCH_PHRASES
-
 
 def build_search_urls():
     configured_urls = split_env_list(os.getenv("FACEBOOK_MARKETPLACE_URLS"))
@@ -253,7 +250,6 @@ def build_search_urls():
         urls.append(f"{BASE_URL}/marketplace/{quote_plus(SEARCH_CITY)}/search/?{urlencode(params)}")
     return urls
 
-
 def normalize_marketplace_link(raw_url):
     if not raw_url:
         return None
@@ -263,11 +259,9 @@ def normalize_marketplace_link(raw_url):
         return None
     return f"{BASE_URL}/marketplace/item/{match.group(1)}/"
 
-
 def extract_marketplace_id(url):
     match = re.search(r"/marketplace/item/(\d+)", url or "")
     return match.group(1) if match else None
-
 
 def create_audit(search_urls):
     search_url = " | ".join(search_urls[:5])
@@ -275,11 +269,9 @@ def create_audit(search_urls):
         search_url += f" | +{len(search_urls) - 5} busquedas"
     return ScraperAudit(SOURCE_NAME, search_url=search_url)
 
-
 def goto_page(page, url, wait_until="domcontentloaded"):
     page.goto(url, wait_until=wait_until, timeout=PAGE_TIMEOUT_MS)
     page.wait_for_timeout(1200)
-
 
 def click_cookie_buttons(page):
     names = [
@@ -299,7 +291,6 @@ def click_cookie_buttons(page):
         except Exception:
             continue
 
-
 def page_needs_login_or_checkpoint(page):
     current_url = page.url.lower()
     if "/login" in current_url or "/checkpoint" in current_url:
@@ -318,7 +309,6 @@ def page_needs_login_or_checkpoint(page):
     ]
     return any(marker in body for marker in markers)
 
-
 def wait_for_manual_login_if_needed(page):
     if not page_needs_login_or_checkpoint(page):
         return
@@ -328,7 +318,6 @@ def wait_for_manual_login_if_needed(page):
     print("[WARN] Facebook pide login, 2FA o captcha.")
     print(f"[WARN] Usa la ventana de Chromium para iniciar sesion. Esperando {LOGIN_WAIT_SECONDS}s...")
     page.wait_for_timeout(LOGIN_WAIT_SECONDS * 1000)
-
 
 def extract_links_from_page(page):
     try:
@@ -348,7 +337,6 @@ def extract_links_from_page(page):
         seen.add(link)
         links.append(link)
     return links
-
 
 def collect_publication_links(context):
     search_urls = build_search_urls()
@@ -450,7 +438,6 @@ def collect_publication_links(context):
         )
     return all_links, audit
 
-
 def click_see_more_buttons(page):
     labels = [
         "Ver mas",
@@ -473,13 +460,11 @@ def click_see_more_buttons(page):
         except Exception:
             continue
 
-
 def safe_body_text(page):
     try:
         return page.locator("body").inner_text(timeout=10000)
     except Exception:
         return ""
-
 
 def meta_content(page, selector):
     try:
@@ -488,7 +473,6 @@ def meta_content(page, selector):
         return clean_text(page.locator(selector).first.get_attribute("content", timeout=1000))
     except Exception:
         return None
-
 
 def extract_title(page, body_text):
     candidates = []
@@ -533,7 +517,6 @@ def extract_title(page, body_text):
             return value
     return None
 
-
 def decode_facebook_string(value):
     if value is None:
         return None
@@ -546,14 +529,12 @@ def decode_facebook_string(value):
         except Exception:
             return clean_text(value)
 
-
 def extract_first_json_string(html, patterns):
     for pattern in patterns:
         match = re.search(pattern, html or "")
         if match:
             return decode_facebook_string(match.group(1))
     return None
-
 
 def extract_embedded_listing_fields(html):
     title = extract_first_json_string(
@@ -598,7 +579,6 @@ def extract_embedded_listing_fields(html):
         "location": location,
     }
 
-
 def is_ui_noise_line(line):
     norm = normalize_text(line)
     if not norm:
@@ -613,7 +593,6 @@ def is_ui_noise_line(line):
         return True
     return False
 
-
 def is_price_like_line(line):
     norm = normalize_text(line)
     return bool(
@@ -621,7 +600,6 @@ def is_price_like_line(line):
         or re.search(r"\b[0-9]{2,4}\s*(MILLONES|MILLON|MM)\b", norm)
         or re.search(r"\b(PRECIO|VALOR)\b", norm)
     )
-
 
 def find_listing_start(lines, title):
     title_norm = normalize_text(title)
@@ -653,7 +631,6 @@ def find_listing_start(lines, title):
                 return candidate_index
     return None
 
-
 def extract_listing_lines(body_text, title):
     lines = get_lines(body_text)
     if not lines:
@@ -677,7 +654,6 @@ def extract_listing_lines(body_text, title):
             break
 
     return selected
-
 
 def extract_description(body_text, title, listing_lines=None):
     lines = listing_lines if listing_lines is not None else extract_listing_lines(body_text, title)
@@ -714,7 +690,6 @@ def extract_description(body_text, title, listing_lines=None):
 
     return clean_text("\n".join(selected)) or clean_text("\n".join(lines))
 
-
 def parse_money_digits(raw):
     digits = re.sub(r"[^\d]", "", raw or "")
     if not digits:
@@ -724,9 +699,12 @@ def parse_money_digits(raw):
     except ValueError:
         return None
 
-
 def extract_price(text):
     source = text or ""
+    core_price = core_parse_price(source)
+    if core_price and core_price >= MIN_SALE_PRICE:
+        return core_price
+
     candidates = []
 
     money_patterns = [
@@ -752,7 +730,6 @@ def extract_price(text):
 
     return max(candidates) if candidates else None
 
-
 def has_negative_operation(text):
     source = normalize_text(text)
     for pattern in NEGATIVE_OPERATION_PATTERNS:
@@ -763,15 +740,19 @@ def has_negative_operation(text):
             return True
     return False
 
-
 def is_sale_listing(title, description):
     source = normalize_text(f"{title or ''}\n{description or ''}")
+    core_ok, core_reason = core_sale_status(source)
+    if not core_ok and core_reason == "no_venta":
+        return False, "no_es_venta_pura"
+    if core_ok:
+        return True, None
+
     if has_negative_operation(source):
         return False, "no_es_venta_pura"
     if any(re.search(pattern, source) for pattern in SALE_PATTERNS):
         return True, None
     return False, "sin_palabra_venta"
-
 
 def extract_property_type(title, description):
     source = normalize_text(f"{title or ''}\n{description or ''}")
@@ -780,8 +761,11 @@ def extract_property_type(title, description):
             return label
     return None
 
-
 def extract_barrio(title, description):
+    core_barrio = core_extract_barrio(f"{title or ''}\n{description or ''}")
+    if core_barrio:
+        return core_barrio
+
     patterns = [
         r"\bBARRIO\s+([A-Z0-9 \-]+)",
         r"\bSECTOR\s+([A-Z0-9 \-]+)",
@@ -801,8 +785,7 @@ def extract_barrio(title, description):
             value = clean_text(value)
             if value:
                 return value.title()
-    return None
-
+    return core_parse_area(text)
 
 def is_explicitly_out_of_city(title, description):
     source = normalize_text(f"{title or ''}\n{description or ''}")
@@ -810,13 +793,11 @@ def is_explicitly_out_of_city(title, description):
         return False
     return any(keyword in source for keyword in OUT_OF_CITY_KEYWORDS)
 
-
 def extract_city(title, description):
     source = normalize_text(f"{title or ''}\n{description or ''}")
     if "PASTO" in source:
         return "Pasto"
     return "Pasto"
-
 
 def extract_area(text):
     source = normalize_text(text)
@@ -833,7 +814,6 @@ def extract_area(text):
                 continue
     return None
 
-
 def extract_count(text, patterns):
     source = normalize_text(text)
     for pattern in patterns:
@@ -845,7 +825,6 @@ def extract_count(text, patterns):
                 continue
     return None
 
-
 def extract_location(body_text):
     lines = get_lines(body_text)
     for line in lines:
@@ -856,7 +835,6 @@ def extract_location(body_text):
         if "Pasto" in line:
             return clean_text(line)
     return None
-
 
 def extract_seller(page, body_text):
     selectors = [
@@ -880,7 +858,6 @@ def extract_seller(page, body_text):
             if index + 1 < len(lines):
                 return clean_text(lines[index + 1])[:150]
     return None
-
 
 def extract_image_urls(page):
     try:
@@ -916,7 +893,6 @@ def extract_image_urls(page):
         if len(image_urls) >= MAX_IMAGES_PER_LISTING:
             break
     return image_urls
-
 
 def extract_publication_data(page, link):
     print(f"[INFO] Extrayendo publicacion Facebook: {link}")
@@ -970,10 +946,15 @@ def extract_publication_data(page, link):
 
     item_id = extract_marketplace_id(link)
     barrio = extract_barrio(title, full_text)
+    if not barrio:
+        print(f"[SKIP] Venta con precio pero sin barrio identificable: {title}")
+        return None, html, [], "sin_barrio"
+
     ciudad = extract_city(title, full_text)
     location = embedded.get("location") or extract_location(listing_text) or extract_location(body_text)
     image_urls = extract_image_urls(page)
     seller = extract_seller(page, body_text)
+    ph = core_detect_ph(full_text)
 
     notes = {
         "titulo_facebook": title,
@@ -994,7 +975,7 @@ def extract_publication_data(page, link):
         "ciudad": ciudad,
         "barrio": barrio,
         "tipo_inmueble": tipo_inmueble,
-        "ph": None,
+        "ph": ph,
         "estrato": extract_count(full_text, [r"ESTRATO\s+([0-9])"]),
         "descripcion": description,
         "precio": price,
@@ -1013,7 +994,6 @@ def extract_publication_data(page, link):
     }
     return data, html, image_urls, None
 
-
 def save_collected_links(publication_links, audit):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -1030,12 +1010,11 @@ def save_collected_links(publication_links, audit):
     print(f"[AUDITORIA] Links recolectados guardados: {path}")
     return path
 
-
 def print_db_connection_help(error):
     if "DB_PASSWORD" in os.environ:
         password_status = "definida_en_entorno_o_env"
     elif DB_CONFIG.get("password"):
-        password_status = "valor_por_defecto"
+        password_status = "definida_en_env_local"
     else:
         password_status = "vacia"
     print("[ERROR] No se pudo conectar a MySQL.")
@@ -1046,165 +1025,14 @@ def print_db_connection_help(error):
         f"DB_PORT={DB_CONFIG.get('port')} "
         f"DB_USER={DB_CONFIG.get('user')} "
         f"DB_NAME={DB_CONFIG.get('database')} "
-        f"DB_PASSWORD={password_status}"
+        f"DB_PASSWORD: {password_status}"
     )
     if "DB_PASSWORD" not in os.environ:
-        print("[ERROR] No hay DB_PASSWORD en el entorno/.env; se uso el valor por defecto del script.")
+        print("[ERROR] DB_PASSWORD no vino del entorno de PowerShell; revisa tambien .env.local.")
     print("[ERROR] Soluciones:")
-    print("[ERROR] - Define la clave correcta: $env:DB_PASSWORD=\"tu_clave_mysql\"")
+    print("[ERROR] - Define DB_PASSWORD en PowerShell o en .env.local con tu clave real.")
     print("[ERROR] - Revisa el puerto: $env:DB_PORT=\"3306\" o el que use tu MySQL.")
     print("[ERROR] - Para probar sin guardar: $env:FACEBOOK_DRY_RUN=\"true\"")
-
-
-def get_connection():
-    if mysql is None:
-        raise RuntimeError("mysql-connector-python no esta instalado.")
-    return mysql.connector.connect(**DB_CONFIG)
-
-
-def get_or_create_fuente_id(connection):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-        """,
-        (
-            SOURCE_NAME,
-            "https://www.facebook.com/marketplace/",
-            "marketplace",
-            "Scraper de inmuebles en venta en Pasto desde Facebook Marketplace",
-        ),
-    )
-    connection.commit()
-    fuente_id = cursor.lastrowid
-    cursor.close()
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,),
-        )
-    result = cursor.fetchone()
-    cursor.close()
-    return result[0] if result else None
-
-
-def insert_publicacion(connection, data):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO publicaciones (
-            fuente_id, codigo_externo, link_origen, links_adicionales,
-            coordenadas, latitud, longitud, direccion, ciudad, barrio,
-            tipo_inmueble, ph, estrato, descripcion, precio, m2,
-            m2_construido, antiguedad, pisos, habitaciones, banios,
-            parqueadero, administracion, notas
-        )
-        VALUES (
-            %(fuente_id)s, %(codigo_externo)s, %(link_origen)s, %(links_adicionales)s,
-            %(coordenadas)s, %(latitud)s, %(longitud)s, %(direccion)s, %(ciudad)s, %(barrio)s,
-            %(tipo_inmueble)s, %(ph)s, %(estrato)s, %(descripcion)s, %(precio)s, %(m2)s,
-            %(m2_construido)s, %(antiguedad)s, %(pisos)s, %(habitaciones)s, %(banios)s,
-            %(parqueadero)s, %(administracion)s, %(notas)s
-        )
-        """,
-        data,
-    )
-    connection.commit()
-    publicacion_id = cursor.lastrowid
-    cursor.close()
-    return publicacion_id
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo),
-    )
-    if cursor.fetchone():
-        cursor.close()
-        return
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion
-        (publicacion_id, tipo, ruta_archivo, url_original, hash_archivo)
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original, file_hash(ruta_archivo)),
-    )
-    connection.commit()
-    cursor.close()
-
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    for folder in [html_dir, img_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-    return html_dir, img_dir
-
-
-def sanitize_filename(value):
-    value = clean_text(value) or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", value)
-    return value[:120]
-
-
-def file_hash(path):
-    if not path or not Path(path).exists():
-        return None
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
-
-
-def save_html(html, codigo_archivo, publicacion_id):
-    html_dir, _ = get_publication_evidence_dirs(publicacion_id)
-    path = html_dir / f"facebook_{sanitize_filename(codigo_archivo)}.html"
-    with open(path, "w", encoding="utf-8") as file:
-        file.write(html)
-    return path
-
 
 def download_image_with_context(context, image_url, codigo_archivo, index, publicacion_id):
     _, img_dir = get_publication_evidence_dirs(publicacion_id)
@@ -1234,7 +1062,6 @@ def download_image_with_context(context, image_url, codigo_archivo, index, publi
             print(f"[WARN] No se pudo descargar imagen {image_url}: {first_error} / {second_error}")
             return None
 
-
 def save_publication_evidence(context, connection, publicacion_id, data, html, image_urls):
     codigo_archivo = data.get("codigo_externo") or f"publicacion_{publicacion_id}"
     html_path = save_html(html, codigo_archivo, publicacion_id)
@@ -1247,7 +1074,6 @@ def save_publication_evidence(context, connection, publicacion_id, data, html, i
         if image_path and connection:
             insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
 
-
 def open_facebook_context(playwright):
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     return playwright.chromium.launch_persistent_context(
@@ -1259,12 +1085,12 @@ def open_facebook_context(playwright):
         args=["--disable-blink-features=AutomationControlled"],
     )
 
-
 def main():
     if sync_playwright is None:
         raise RuntimeError("playwright no esta instalado. Ejecuta: pip install playwright")
 
     print("[INFO] Iniciando scraper Facebook Marketplace")
+    print("[INFO] Fuente revisada: Facebook Marketplace")
     print(f"[INFO] FACEBOOK_SEARCH_CITY: {SEARCH_CITY}")
     print(f"[INFO] FACEBOOK_HEADLESS: {HEADLESS}")
     print(f"[INFO] FACEBOOK_DRY_RUN: {DRY_RUN}")
@@ -1277,6 +1103,9 @@ def main():
     total_nuevas = 0
     total_saltadas = 0
     total_omitidas = 0
+    total_sin_precio = 0
+    total_no_venta = 0
+    total_sin_barrio = 0
     total_errores = 0
 
     with sync_playwright() as playwright:
@@ -1315,6 +1144,15 @@ def main():
                     data, html, image_urls, skip_reason = extract_publication_data(detail_page, link)
                     if not data:
                         total_omitidas += 1
+                        bucket = skip_bucket(skip_reason)
+                        if bucket == "sin_precio":
+                            total_sin_precio += 1
+                        elif bucket == "no_venta":
+                            total_no_venta += 1
+                        elif bucket == "sin_barrio":
+                            total_sin_barrio += 1
+                        else:
+                            total_errores += 1
                         audit.record_omission(skip_reason or "sin_datos_extraidos", link)
                         continue
 
@@ -1381,19 +1219,27 @@ def main():
                 connection.close()
 
     print("\n[OK] Scraping Facebook Marketplace finalizado.")
-    print(f"[RESUMEN] Nuevas guardadas/aceptadas: {total_nuevas}")
-    print(f"[RESUMEN] Saltadas porque ya existian: {total_saltadas}")
-    print(f"[RESUMEN] Omitidas por filtro/precio/tipo: {total_omitidas}")
-    print(f"[RESUMEN] Errores: {total_errores}")
+    print_scraper_summary(
+        fuente="Facebook Marketplace",
+        total_encontrado=len(publication_links),
+        guardadas=total_nuevas,
+        descartadas_sin_precio=total_sin_precio,
+        descartadas_no_venta=total_no_venta,
+        descartadas_sin_barrio=total_sin_barrio,
+        duplicadas=total_saltadas,
+        errores=total_errores,
+    )
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
         omitidas=total_omitidas,
+        omitidas_sin_precio=total_sin_precio,
+        omitidas_no_venta=total_no_venta,
+        omitidas_sin_barrio=total_sin_barrio,
         errores=total_errores,
     )
     audit.print_summary(len(publication_links))
     audit.save(len(publication_links))
-
 
 if __name__ == "__main__":
     main()
