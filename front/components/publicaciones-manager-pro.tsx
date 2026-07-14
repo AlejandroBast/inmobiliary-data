@@ -45,6 +45,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Eye,
+  HelpCircle,
   ImageIcon,
   Loader2,
   MapPin,
@@ -156,6 +157,7 @@ export function PublicacionesManagerPro({
     }
 
     setLinksLoading(true)
+    setLinkStatuses({})
 
     validatePublicacionLinks(items)
       .then((results) => {
@@ -672,6 +674,12 @@ export function PublicacionesManagerPro({
                     <Badge variant="outline" className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
                       <CheckCircle2 className="size-3" />
                       Link disponible
+                    </Badge>
+                  )}
+                  {linkStatuses[detail.id] && linkStatuses[detail.id]?.ok === null && (
+                    <Badge variant="outline" className="gap-1 border-slate-300 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
+                      <HelpCircle className="size-3" />
+                      No verificable (sesion Facebook)
                     </Badge>
                   )}
                   {linkStatuses[detail.id]?.ok === false && (
