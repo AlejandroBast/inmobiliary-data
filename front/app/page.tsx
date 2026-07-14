@@ -67,6 +67,7 @@ export default async function Page({
     m2Max: firstValue(params.m2Max),
     phTipo: firstValue(params.phTipo),
     parqueadero: firstValue(params.parqueadero),
+    duplicados: firstValue(params.duplicados),
   }
 
   const [publicaciones, fuentes, barriosData] = await Promise.all([
@@ -125,6 +126,7 @@ export default async function Page({
               m2Max: filtros.m2Max ?? undefined,
               phTipo: filtros.phTipo ?? undefined,
               parqueadero: filtros.parqueadero ?? undefined,
+              duplicados: filtros.duplicados ?? undefined,
             }}
           />
         }
