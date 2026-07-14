@@ -29,6 +29,8 @@ from scraper_audit import ScraperAudit
 
 load_dotenv()
 
+# URL base del listado de Finca Raiz (mezclado). Se usa solo como raiz para
+# construir las URLs de las subcategorias de VENTA (ver SALE_SUBCATEGORIES).
 SEARCH_URL = os.getenv(
     "AMOREL_SEARCH_URL",
     "https://amorelpasto.com/clasificados/web/app.php/resultados/Finca%20Raiz",
@@ -43,9 +45,10 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
 }
 
-# 0 = all pages detected from the Amorel pagination.
+# 0 = todas las paginas detectadas por subcategoria.
 MAX_PAGES = int(os.getenv("AMOREL_MAX_PAGES", "0"))
 REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "0.5"))
+PAGE_PAUSE_SECONDS = float(os.getenv("AMOREL_PAGE_PAUSE_SECONDS", "0.3"))
 IMAGE_DOWNLOAD_WORKERS = int(os.getenv("IMAGE_DOWNLOAD_WORKERS", "6"))
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "12"))
 MIN_SALE_PRICE = int(os.getenv("AMOREL_MIN_SALE_PRICE", "10000000"))
@@ -58,23 +61,57 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
 
+# ---------------------------------------------------------------------------
+# Subcategorias de VENTA reales del sitio (menu lateral "Sub Categorias").
+# Entrar directo por aqui es el filtro mas fuerte posible: es el propio sitio
+# el que ya separo arriendo / anticresis / venta, en vez de adivinar por texto.
+# El segundo valor es el tipo de inmueble que esa subcategoria garantiza
+# (None cuando la subcategoria mezcla varios tipos, ej. locales/oficinas/bodegas).
+# ---------------------------------------------------------------------------
+SALE_SUBCATEGORIES = [
+    ("apartamentos ventas", "Apartamento"),
+    ("casas venta", "Casa"),
+    ("fincas venta", "Finca"),
+    ("lotes venta", "Lote"),
+    ("locales, oficinas y bodegas en venta", None),
+]
+
 NEGATIVE_TITLE_KEYWORDS = [
     "ARRIENDO",
     "ARRIENDA",
+    "ARRIENDAS",
+    "ARRENDO",
     "ARRENDA",
     "ARRENDAR",
+    "ARRENDAMOS",
+    "ARRENDANDO",
     "RENTA",
     "RENTO",
+    "RENTAR",
     "ALQUILA",
+    "ALQUILO",
     "ALQUILER",
+    "ALQUILAR",
     "ANTICRES",
     "ANTICRESA",
     "ANTICRESO",
+    "ANTICRESIS",
+    "ANTICRETICO",
     "PERMUTO",
     "PERMUTA",
+    "PERMUTAR",
+    "CAMBIO POR",
+    "INTERCAMBIO",
+    "COMPRO",
+    "COMPRA DE",
+    "SE COMPRA",
+    "CEDO",
+    "CEDE",
+    "CESION",
     "BUSCO",
     "BUSCA",
     "BUSQUEDA",
+    "SE BUSCA",
 ]
 
 SALE_KEYWORDS = ["VENTA", "VENTAS", "VENDE", "VENDO", "VENDER"]
@@ -104,6 +141,9 @@ def normalize_text(value):
     value = clean_text(value) or ""
     value = unicodedata.normalize("NFD", value)
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    # "86 M²" -> "86 M2". El superindice no es una tilde (no se quita con NFD),
+    # asi que sin esto extract_area/extract_price pierden datos de forma silenciosa.
+    value = value.replace("\u00b2", "2").replace("\u00b3", "3")
     return value.upper()
 
 
@@ -192,7 +232,6 @@ def get_lines(text):
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
-
 PUBLICATION_LINK_PATTERN = re.compile(
     r"/(?:publicacion|publicaciones|anuncio)/(\d+)(?:[/?#-]|$)",
     re.IGNORECASE,
@@ -220,26 +259,21 @@ def is_publication_url(url):
     return extract_publication_id(url) is not None
 
 
-def is_results_page_url(url):
-    if not is_amorel_url(url):
-        return False
-    if is_publication_url(url):
-        return False
-    normalized = normalize_text(url)
-    return (
-        "/resultados/" in url
-        or "PAGINA=" in normalized
-        or "PAGE=" in normalized
-        or "Finca%20Raiz" in url
-        or "Finca Raiz" in unquote(url)
-    )
+def build_subcategory_url(subcat_label):
+    """
+    Construye la URL de una subcategoria de venta a partir de SEARCH_URL.
+    safe_url() se encarga de normalizar espacios/comas al hacer la peticion,
+    asi que aqui se puede concatenar el nombre "en crudo".
+    """
+    base = SEARCH_URL.rstrip("/")
+    return f"{base}/{subcat_label}"
 
 
-def build_page_url(page_number):
+def build_page_url(base_url, page_number):
     if page_number <= 1:
-        return SEARCH_URL
+        return base_url
 
-    parts = urlsplit(SEARCH_URL)
+    parts = urlsplit(base_url)
     query = parts.query
     if re.search(r"(^|&)pagina=\d+", query):
         query = re.sub(r"(^|&)pagina=\d+", rf"\1pagina={page_number}", query)
@@ -250,66 +284,64 @@ def build_page_url(page_number):
 
 def collect_publication_links():
     """
-    Recorre Amorel con dos estrategias:
-    1) Sigue los enlaces reales de paginacion que entrega la pagina.
-    2) Hace respaldo secuencial con ?pagina=N hasta que aparezcan paginas sin links nuevos.
+    Recorre unicamente las subcategorias de VENTA reales del sitio
+    (SALE_SUBCATEGORIES). Por cada una hace paginacion secuencial ?pagina=N
+    hasta que dos paginas seguidas no traen links nuevos.
 
-    Esto corrige el problema de revisar solo una parte de los resultados cuando
-    la paginacion no aparece exactamente como ?pagina=N en el HTML.
+    A diferencia de la version anterior, NO sigue enlaces de navegacion
+    encontrados dentro del HTML (el sidebar de cada pagina trae links a
+    TODAS las categorias, incluyendo arriendo/anticresis, y seguirlos
+    rompe el filtro "solo ventas" ademas de desperdiciar peticiones).
+
+    Devuelve: lista de (url_publicacion, tipo_inmueble_sugerido_por_subcategoria)
     """
     audit = ScraperAudit("Amorel", SEARCH_URL)
-    all_links = []
+    all_links = []  # lista de (url, tipo_inmueble_hint)
     seen_publications = set()
-    seen_pages = set()
-    queued_pages = set()
-    pages_scanned = 0
+    total_pages_scanned = 0
     page_sequence = 0
 
-    def queue_results_page(raw_link, page_url, queue):
-        full_url = canonicalize_url(urljoin(page_url, raw_link))
-        if not is_results_page_url(full_url):
-            return
-        if full_url in seen_pages or full_url in queued_pages:
-            return
-        queued_pages.add(full_url)
-        queue.append(full_url)
+    for subcat_label, tipo_hint in SALE_SUBCATEGORIES:
+        subcat_base_url = canonicalize_url(build_subcategory_url(subcat_label))
+        print(f"[INFO] === Subcategoria de venta: '{subcat_label}' -> {subcat_base_url}")
 
-    def scan_page(page_url, queue=None, source_label="auto"):
-        nonlocal pages_scanned, page_sequence
+        empty_streak = 0
+        page_number = 1
+        pages_scanned_subcat = 0
 
-        page_url = canonicalize_url(page_url)
-        if page_url in seen_pages:
-            return 0, 0, True
+        while True:
+            if MAX_PAGES > 0 and pages_scanned_subcat >= MAX_PAGES:
+                break
 
-        if MAX_PAGES > 0 and pages_scanned >= MAX_PAGES:
-            return 0, 0, False
+            page_url = canonicalize_url(build_page_url(subcat_base_url, page_number))
+            page_sequence += 1
 
-        page_sequence += 1
-        try:
-            html, final_url = fetch_url(page_url)
-            final_url = canonicalize_url(final_url)
-        except Exception as error:
-            reason = f"No se pudo abrir la pagina {page_url}: {error}"
-            print(f"[WARN] {reason}")
-            audit.record_page(page_sequence, url=page_url, status="error", reason=reason)
-            seen_pages.add(page_url)
-            pages_scanned += 1
-            return 0, 0, False
+            try:
+                html, final_url = fetch_url(page_url)
+                final_url = canonicalize_url(final_url)
+            except Exception as error:
+                reason = f"No se pudo abrir la pagina {page_url}: {error}"
+                print(f"[WARN] {reason}")
+                audit.record_page(page_sequence, url=page_url, status="error", reason=reason)
+                empty_streak += 1
+                page_number += 1
+                pages_scanned_subcat += 1
+                total_pages_scanned += 1
+                if empty_streak >= 2:
+                    break
+                continue
 
-        seen_pages.add(page_url)
-        seen_pages.add(final_url)
-        pages_scanned += 1
+            parser = parse_html(html)
+            page_seen = set()
+            page_links_count = 0
+            new_links_count = 0
+            duplicate_links_count = 0
 
-        parser = parse_html(html)
-        page_seen = set()
-        page_links_count = 0
-        new_links_count = 0
-        duplicate_links_count = 0
+            for _link_text, href in parser.links:
+                full_url = canonicalize_url(urljoin(final_url, href))
+                if not is_publication_url(full_url):
+                    continue
 
-        for link_text, href in parser.links:
-            full_url = canonicalize_url(urljoin(final_url, href))
-
-            if is_publication_url(full_url):
                 publicacion_id = extract_publication_id(full_url)
                 if not publicacion_id or publicacion_id in page_seen:
                     continue
@@ -320,77 +352,54 @@ def collect_publication_links():
                     duplicate_links_count += 1
                 else:
                     seen_publications.add(publicacion_id)
-                    all_links.append(full_url)
+                    all_links.append((full_url, tipo_hint))
                     new_links_count += 1
-                continue
 
-            if queue is not None:
-                queue_results_page(href, final_url, queue)
+            audit.record_page(
+                page_sequence,
+                url=page_url,
+                links_count=page_links_count,
+                new_links_count=new_links_count,
+                duplicate_links_count=duplicate_links_count,
+                status="ok",
+                reason=f"venta:{subcat_label}",
+            )
+            print(
+                f"[INFO] [{subcat_label}] Pagina {page_number}: {page_links_count} links, "
+                f"{new_links_count} nuevos, {duplicate_links_count} repetidos | {page_url}"
+            )
 
-        audit.record_page(
-            page_sequence,
-            url=page_url,
-            links_count=page_links_count,
-            new_links_count=new_links_count,
-            duplicate_links_count=duplicate_links_count,
-            status="ok",
-            reason=source_label,
-        )
-        print(
-            f"[INFO] Pagina {page_sequence}: {page_links_count} links, "
-            f"{new_links_count} nuevos, {duplicate_links_count} repetidos | {page_url}"
-        )
-        return page_links_count, new_links_count, True
+            pages_scanned_subcat += 1
+            total_pages_scanned += 1
 
-    queue = [canonicalize_url(SEARCH_URL)]
-    queued_pages.add(canonicalize_url(SEARCH_URL))
+            if page_links_count == 0 or new_links_count == 0:
+                empty_streak += 1
+            else:
+                empty_streak = 0
 
-    while queue:
-        page_url = queue.pop(0)
-        scan_page(page_url, queue=queue, source_label="paginacion_html")
-        if MAX_PAGES > 0 and pages_scanned >= MAX_PAGES:
-            break
+            if empty_streak >= 2:
+                break
 
-    # Respaldo: algunas versiones de Amorel no muestran toda la paginacion en el HTML.
-    # Probamos ?pagina=N y paramos cuando dos paginas seguidas no traen links nuevos.
-    empty_streak = 0
-    sequential_page = 2
-    while MAX_PAGES == 0 or pages_scanned < MAX_PAGES:
-        candidate_url = canonicalize_url(build_page_url(sequential_page))
-        sequential_page += 1
-
-        if candidate_url in seen_pages:
-            continue
-
-        links_count, new_links_count, ok = scan_page(
-            candidate_url,
-            queue=None,
-            source_label="respaldo_secuencial",
-        )
-        if not ok:
-            empty_streak += 1
-        elif links_count == 0 or new_links_count == 0:
-            empty_streak += 1
-        else:
-            empty_streak = 0
-
-        if empty_streak >= 2:
-            break
+            page_number += 1
+            if PAGE_PAUSE_SECONDS > 0:
+                time.sleep(PAGE_PAUSE_SECONDS)
 
     limit_reason = None
     if MAX_PAGES > 0:
-        limit_reason = f"AMOREL_MAX_PAGES={MAX_PAGES}; el recorrido se detuvo al llegar a ese limite."
+        limit_reason = f"AMOREL_MAX_PAGES={MAX_PAGES}; el recorrido se detuvo al llegar a ese limite (por subcategoria)."
 
     audit.set_listing_summary(
         total_reported=None,
         pages_expected=None,
-        pages_planned=pages_scanned,
+        pages_planned=total_pages_scanned,
         page_size=None,
         limit_reason=limit_reason,
     )
 
-    print(f"[INFO] Paginas Amorel revisadas: {pages_scanned}")
+    print(f"[INFO] Paginas Amorel revisadas (solo subcategorias de venta): {total_pages_scanned}")
+    print(f"[INFO] Publicaciones de venta encontradas: {len(all_links)}")
     return all_links, audit
+
 
 def parse_money_digits(raw):
     digits = re.sub(r"[^\d]", "", raw or "")
@@ -400,7 +409,6 @@ def parse_money_digits(raw):
         return int(digits)
     except ValueError:
         return None
-
 
 
 def extract_price(text):
@@ -436,15 +444,48 @@ def extract_price(text):
 
     return max(candidates) if candidates else None
 
-def is_sale_listing(title, category, description):
-    title_category = normalize_text(f"{title or ''} {category or ''}")
-    if any(keyword in title_category for keyword in NEGATIVE_TITLE_KEYWORDS):
-        return False, "no_es_venta_pura"
 
-    if any(keyword in title_category for keyword in SALE_KEYWORDS):
+def is_price_negotiable(text):
+    return bool(re.search(r"\bNEGOCIABLE\b", normalize_text(text)))
+
+
+def is_sale_listing(title, category, description):
+    """
+    Determina si una publicacion es realmente una VENTA (no arriendo, no
+    anticresis, no permuta, no compra, no cesion).
+
+    Estrategia en capas:
+    1. La categoria propia del sitio (ej. "Apartamentos Ventas") es la senal
+       mas confiable porque viene de como el publicador clasifico el aviso.
+       Si la categoria menciona arriendo/anticresis explicitamente, se
+       rechaza de una vez.
+    2. Aun si la categoria dice "venta", se revisa titulo + descripcion +
+       categoria en busca de palabras negativas (arriendo, permuta, cesion,
+       compra, etc.) porque hay avisos mixtos tipo
+       "VENDO, ARRIENDO O PERMUTO" que no son una venta pura.
+    3. Si no hay categoria disponible (fallback), se exige encontrar una
+       palabra de venta en titulo o descripcion.
+    """
+    title_norm = normalize_text(title or "")
+    category_norm = normalize_text(category or "")
+    description_norm = normalize_text(description or "")
+    combined = f"{title_norm} {category_norm} {description_norm}"
+
+    if category_norm and any(
+        keyword in category_norm
+        for keyword in ["ARRIENDO", "ANTICRES", "ANTICRESIS", "ANTICRETICO"]
+    ):
+        return False, "categoria_no_es_venta"
+
+    if any(keyword in combined for keyword in NEGATIVE_TITLE_KEYWORDS):
+        return False, "oferta_mixta_no_es_venta_pura"
+
+    if category_norm and "VENTA" in category_norm:
         return True, None
 
-    description_norm = normalize_text(description)
+    if any(keyword in title_norm for keyword in SALE_KEYWORDS):
+        return True, None
+
     if any(keyword in description_norm for keyword in SALE_KEYWORDS):
         return True, None
 
@@ -538,13 +579,19 @@ def extract_description(lines):
     return clean_text("\n".join(values))
 
 
-def extract_property_type(title, category, description):
+def extract_property_type(title, category, description, tipo_hint=None):
+    # La subcategoria de origen (Casa/Apartamento/Finca/Lote) es la fuente
+    # mas confiable porque la garantiza el propio sitio. Solo se recurre a
+    # las palabras clave del texto cuando la subcategoria es mixta
+    # (locales/oficinas/bodegas) o no vino ningun hint.
+    if tipo_hint:
+        return tipo_hint
+
     source = normalize_text(f"{title or ''} {category or ''} {description or ''}")
     for label, keywords in PROPERTY_TYPES:
         if any(keyword in source for keyword in keywords):
             return label
     return None
-
 
 
 SPANISH_SMALL_NUMBERS = {
@@ -598,236 +645,6 @@ def smart_title(value):
     return result or None
 
 
-def clean_extracted_name(value):
-    value = normalize_text(value)
-    value = re.sub(r"^[\s\-:]+", "", value)
-    value = re.split(
-        r"\b("
-        r"FSE|CONSTA|CUENTA|VALOR|PRECIO|PASTO|NARINO|NARIÑO|"
-        r"UBICAD[OA]|SE\s+VENDE|VENTA|AREA|ÁREA|M2|MTS|"
-        r"HABITACION|HABITACIONES|ALCOBAS|BAÑOS|BANOS|"
-        r"COCINA|SALA|COMEDOR|PARQUEADERO|GARAJE|"
-        r"AL\s+NORTE|AL\s+SUR|AL\s+ORIENTE|AL\s+OCCIDENTE"
-        r")\b",
-        value,
-        maxsplit=1,
-    )[0]
-    value = re.sub(r"[^A-Z0-9Ñ\s\-]", " ", value)
-    value = re.sub(r"\s+", " ", value).strip(" -")
-    if len(value) <= 1:
-        return None
-    return smart_title(value)
-
-
-def extract_conjunto_edificio(title, description):
-    source = "\n".join(value for value in [title, description] if value)
-
-    patterns = [
-        r"\bCONJUNTO(?:\s+CERRADO)?\s*[-:]?\s*([A-Z0-9Ñ\s\-]+?)(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+FSE|$)",
-        r"\bEDIFICIO\s+([A-Z0-9Ñ\s\-]+?)(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+FSE|$)",
-        r"\bUNIDAD\s+RESIDENCIAL\s+([A-Z0-9Ñ\s\-]+?)(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+FSE|$)",
-        r"\bCONDOMINIO\s+([A-Z0-9Ñ\s\-]+?)(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+FSE|$)",
-    ]
-
-    for raw_line in source.splitlines():
-        line = normalize_text(raw_line)
-        for pattern in patterns:
-            match = re.search(pattern, line, flags=re.IGNORECASE)
-            if match:
-                name = clean_extracted_name(match.group(1))
-                if name:
-                    return name
-
-    return None
-
-
-def extract_ph_value(text, edificio_conjunto=None):
-    source = normalize_text(text)
-
-    if re.search(r"\b(NO\s+PH|SIN\s+PH|NO\s+PROPIEDAD\s+HORIZONTAL|SIN\s+EDIFICIO)\b", source):
-        return None
-
-    ph_keywords = [
-        "PROPIEDAD HORIZONTAL",
-        " P H ",
-        " PH ",
-        "CONJUNTO",
-        "CONJUNTO CERRADO",
-        "EDIFICIO",
-        "UNIDAD RESIDENCIAL",
-        "CONDOMINIO",
-        "URBANIZACION CERRADA",
-    ]
-
-    if edificio_conjunto or any(keyword in f" {source} " for keyword in ph_keywords):
-        return 1
-
-    return None
-
-
-
-def extract_barrio(title, description):
-    """
-    Identifica barrio desde titulo o detalle. Es obligatorio para guardar,
-    pero se calcula desde texto libre porque Amorel no lo trae estructurado.
-    """
-    source = "\n".join(value for value in [title, description] if value)
-
-    patterns = [
-        r"\bBARRIO\s+([A-Z0-9Ñ\s\-]+)",
-        r"\bSECTOR\s+([A-Z0-9Ñ\s\-]+)",
-        r"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*BARRIO\s+([A-Z0-9Ñ\s\-]+)",
-        r"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*SECTOR\s+([A-Z0-9Ñ\s\-]+)",
-    ]
-
-    for raw_line in source.splitlines():
-        line = normalize_text(raw_line)
-        for pattern in patterns:
-            match = re.search(pattern, line)
-            if match:
-                barrio = clean_extracted_name(match.group(1))
-                if barrio:
-                    return barrio
-
-    return None
-
-def extract_city(title, description):
-    source = normalize_text(f"{title or ''} {description or ''}")
-    if "CHACHAGUI" in source:
-        return "Chachagui"
-    if "BUESACO" in source:
-        return "Buesaco"
-    if "ENCANO" in source:
-        return "El Encano"
-    return "Pasto"
-
-
-
-def extract_area(text):
-    source = normalize_text(text or "")
-    patterns = [
-        r"(?:AREA|AREA\s+CONSTRUIDA|AREA\s+TOTAL|AREA\s+DEL\s+LOTE)\s*(?:DE|:)?\s*(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS)",
-        r"(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS\s+CUADRADOS)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, source)
-        if match:
-            try:
-                return float(match.group(1).replace(",", "."))
-            except ValueError:
-                continue
-    return None
-
-
-def extract_count(text, patterns):
-    source = normalize_text(text or "")
-    for pattern in patterns:
-        match = re.search(pattern, source)
-        if match:
-            value = parse_small_int(match.group(1))
-            if value is not None:
-                return value
-    return None
-
-
-def number_pattern():
-    return r"(\d+|UN|UNA|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE|OCHO|NUEVE|DIEZ)"
-
-
-def extract_habitaciones(text):
-    n = number_pattern()
-    return extract_count(
-        text,
-        [
-            rf"{n}\s+(?:HABITACIONES?|HABITACION|ALCOBAS?|CUARTOS?)",
-            rf"(?:HABITACIONES?|HABITACION|ALCOBAS?|CUARTOS?)\s*[:\-]?\s*{n}",
-        ],
-    )
-
-
-def extract_banios(text):
-    n = number_pattern()
-    return extract_count(
-        text,
-        [
-            rf"{n}\s+(?:BAÑOS?|BANOS?|BA\S*OS?)",
-            rf"(?:BAÑOS?|BANOS?|BA\S*OS?)\s*[:\-]?\s*{n}",
-        ],
-    )
-
-
-def extract_parqueaderos(text):
-    n = number_pattern()
-    count = extract_count(
-        text,
-        [
-            rf"{n}\s+(?:PARQUEADEROS?|GARAJES?)",
-            rf"(?:PARQUEADEROS?|GARAJES?)\s*[:\-]?\s*{n}",
-        ],
-    )
-    if count is not None:
-        return count
-
-    if re.search(r"\b(PARQUEADERO|GARAJE|GARAJES)\b", normalize_text(text or "")):
-        return 1
-
-    return None
-
-
-def extract_administracion(text):
-    source = normalize_text(text or "")
-    patterns = [
-        r"ADMINISTRACION\s*(?:DE|MENSUAL|VALOR)?\s*[:\-]?\s*\$?\s*([\d\.\,]+)",
-        r"ADMIN\s*[:\-]?\s*\$?\s*([\d\.\,]+)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, source)
-        if match:
-            value = parse_money_digits(match.group(1))
-            if value and value > 0:
-                return value
-    return None
-
-
-def extract_antiguedad(text):
-    source = normalize_text(text or "")
-    match = re.search(
-        r"ANTIGUEDAD\s*[:\-]?\s*((?:\d+\s*(?:A|A\s+)?\s*\d*\s*ANOS?)|NUEVO|USADO|PARA\s+ESTRENAR)",
-        source,
-    )
-    if not match:
-        return None
-
-    value = match.group(1).replace("ANOS", "años")
-    return smart_title(value)
-
-def extract_images(parser, page_url):
-    image_urls = []
-    seen = set()
-    by_anuncio = {}
-
-    for image in parser.images:
-        src = image.get("src") or image.get("data-src")
-        if not src:
-            continue
-        full_url = urljoin(page_url, src)
-        if "/api/v1/anuncio/" not in full_url:
-            continue
-        match = re.search(r"/api/v1/anuncio/(\d+)/(imagen|thumb)", full_url)
-        key = match.group(1) if match else full_url
-        kind = match.group(2) if match else "imagen"
-        current = by_anuncio.get(key)
-        if not current or kind == "imagen":
-            by_anuncio[key] = full_url
-
-    for full_url in by_anuncio.values():
-        if full_url not in seen:
-            seen.add(full_url)
-            image_urls.append(full_url)
-
-    return image_urls
-
-
 LOCATION_STOP = (
     r"(?=\s+BARRIO|\s+SECTOR|\s+CONSTA|\s+CUENTA|\s+VALOR|\s+PRECIO|\s+PASTO|"
     r"\s+FSE|\s+INF|\s+INFORMES|\s+CON\s|\s+TIENE\s|\s+NEGOCIABLES|$)"
@@ -839,7 +656,7 @@ def clean_extracted_name(value):
     value = re.sub(r"^[\s\-:]+", "", value)
     value = re.split(
         r"\b("
-        r"FSE|CONSTA|CUENTA|VALOR|PRECIO|PASTO|NARINO|NARINO|INF|INFORMES|"
+        r"FSE|CONSTA|CUENTA|VALOR|PRECIO|PASTO|NARINO|INF|INFORMES|"
         r"UBICAD[OA]|SE\s+VENDE|VENTA|AREA|M2|MTS|HABITACION|HABITACIONES|"
         r"ALCOBAS|BANOS|COCINA|SALA|COMEDOR|PARQUEADERO|GARAJE|NEGOCIABLES|"
         r"ASCENSOR|PISCINA|CANCHAS|PATIO|ZONA\s+DE\s+LAVANDERIA"
@@ -910,10 +727,10 @@ def extract_ph_value(text, edificio_conjunto=None):
 def extract_barrio(title, description):
     source = "\n".join(value for value in [title, description] if value)
     patterns = [
-        rf"\bBARRIO\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
-        rf"\bSECTOR\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
-        rf"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*BARRIO\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
-        rf"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*SECTOR\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
+        rf"\bBARRIO\s+([A-Z0-9,\s\-]+?){LOCATION_STOP}",
+        rf"\bSECTOR\s+([A-Z0-9,\s\-]+?){LOCATION_STOP}",
+        rf"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*BARRIO\s+([A-Z0-9,\s\-]+?){LOCATION_STOP}",
+        rf"\bUBICAD[OA]\s+EN\s+(?:EL|LA)?\s*SECTOR\s+([A-Z0-9,\s\-]+?){LOCATION_STOP}",
     ]
 
     for raw_line in source.splitlines():
@@ -934,11 +751,11 @@ def extract_location_hint(title, description, edificio_conjunto=None):
 
     source = "\n".join(value for value in [title, description] if value)
     patterns = [
-        rf"\bUBICAD[OA]\s+EN\s+(?!LA\s+CIUDAD\b|EL\s+MUNICIPIO\b)(?:EL|LA|LOS|LAS)?\s*([A-Z0-9\s\-]+?){LOCATION_STOP}",
+        rf"\bUBICAD[OA]\s+EN\s+(?!LA\s+CIUDAD\b|EL\s+MUNICIPIO\b)(?:EL|LA|LOS|LAS)?\s*([A-Z0-9,\s\-]+?){LOCATION_STOP}",
         r"\bPLENO\s+CENTRO\b",
         r"\bEN\s+(?:EL|LA|LOS|LAS)?\s*(CENTRO|UNICENTRO|MORASURCO|PANDIACO|ALTAMIRA|AGUALONGO|ALFAGUARA|SOTAVENTO|MARILUZ|AQUINE|TAMASAGRA|CHAMPAGNAT|OBONUCO|CATAMBUCO|GENOY|BUESAQUILLO|GUALMATAN|CHACHAGUI|BUESACO|SANDONA|IPIALES)\b",
-        rf"\b(?:POR|CERCA\s+A|CERCA\s+DE|A\s+DOS\s+CUADRAS\s+DE)\s+(?:EL|LA|LOS|LAS)?\s*([A-Z0-9\s\-]+?){LOCATION_STOP}",
-        rf"\bAVENIDA\s+([A-Z0-9\s\-]+?){LOCATION_STOP}",
+        rf"\b(?:POR|CERCA\s+A|CERCA\s+DE|A\s+DOS\s+CUADRAS\s+DE)\s+(?:EL|LA|LOS|LAS)?\s*([A-Z0-9,\s\-]+?){LOCATION_STOP}",
+        rf"\bAVENIDA\s+([A-Z0-9,\s\-]+?){LOCATION_STOP}",
     ]
 
     for raw_line in source.splitlines():
@@ -959,7 +776,7 @@ def extract_title_from_description(description):
 
     source = re.sub(r"^\s*FSE\s*\d+(?:-\d+)?\s*", "", description, flags=re.IGNORECASE)
     source = re.split(
-        r"\b(CONSTA|CARACTERISTICAS|CARACTERISTICAS|VALOR|PRECIO|CUENTA|UBICAD[OA]|INF|INFORMES)\b",
+        r"\b(CONSTA|CARACTERISTICAS|VALOR|PRECIO|CUENTA|UBICAD[OA]|INF|INFORMES)\b",
         source,
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -967,8 +784,173 @@ def extract_title_from_description(description):
     return clean_text(source)
 
 
+def extract_city(title, description):
+    source = normalize_text(f"{title or ''} {description or ''}")
+    if "CHACHAGUI" in source:
+        return "Chachagui"
+    if "BUESACO" in source:
+        return "Buesaco"
+    if "ENCANO" in source:
+        return "El Encano"
+    return "Pasto"
 
-def extract_publication_data(url):
+
+def extract_area(text):
+    source = normalize_text(text or "")
+    patterns = [
+        r"(?:AREA|AREA\s+CONSTRUIDA|AREA\s+TOTAL|AREA\s+DEL\s+LOTE)\s*(?:DE|:)?\s*(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS)",
+        r"(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS\s+CUADRADOS)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match:
+            try:
+                return float(match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+    return None
+
+
+def extract_count(text, patterns):
+    source = normalize_text(text or "")
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match:
+            value = parse_small_int(match.group(1))
+            if value is not None:
+                return value
+    return None
+
+
+def number_pattern():
+    return r"(\d+|UN|UNA|UNO|DOS|TRES|CUATRO|CINCO|SEIS|SIETE|OCHO|NUEVE|DIEZ)"
+
+
+def extract_habitaciones(text):
+    n = number_pattern()
+    return extract_count(
+        text,
+        [
+            rf"{n}\s+(?:HABITACIONES?|HABITACION|ALCOBAS?|CUARTOS?)",
+            rf"(?:HABITACIONES?|HABITACION|ALCOBAS?|CUARTOS?)\s*[:\-]?\s*{n}",
+        ],
+    )
+
+
+def extract_banios(text):
+    n = number_pattern()
+    return extract_count(
+        text,
+        [
+            rf"{n}\s+(?:BAÑOS?|BANOS?|BA\S*OS?)",
+            rf"(?:BAÑOS?|BANOS?|BA\S*OS?)\s*[:\-]?\s*{n}",
+        ],
+    )
+
+
+def extract_parqueaderos(text):
+    source = normalize_text(text or "")
+
+    # "SIN PARQUEADERO" / "NO TIENE GARAJE" son afirmaciones negativas: hay que
+    # descartarlas antes de buscar el conteo, o se terminaria reportando que SI
+    # tiene parqueadero solo porque la palabra aparece en el texto.
+    no_parqueadero = re.search(
+        r"\bSIN\s+PARQUEADERO|\bSIN\s+GARAJE|\bNO\s+(?:TIENE\s+)?PARQUEADERO|\bNO\s+(?:TIENE\s+)?GARAJE",
+        source,
+    )
+
+    n = number_pattern()
+    count = extract_count(
+        text,
+        [
+            rf"{n}\s+(?:PARQUEADEROS?|GARAJES?)",
+            rf"(?:PARQUEADEROS?|GARAJES?)\s*[:\-]?\s*{n}",
+        ],
+    )
+    if count is not None:
+        return 0 if no_parqueadero else count
+
+    if no_parqueadero:
+        return 0
+
+    if re.search(r"\b(PARQUEADERO|GARAJE|GARAJES)\b", source):
+        return 1
+
+    return None
+
+
+def extract_administracion(text):
+    source = normalize_text(text or "")
+    patterns = [
+        r"ADMINISTRACION\s*(?:DE|MENSUAL|VALOR)?\s*[:\-]?\s*\$?\s*([\d\.\,]+)",
+        r"ADMIN\s*[:\-]?\s*\$?\s*([\d\.\,]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match:
+            value = parse_money_digits(match.group(1))
+            if value and value > 0:
+                return value
+    return None
+
+
+def extract_antiguedad(text):
+    source = normalize_text(text or "")
+    match = re.search(
+        r"ANTIGUEDAD\s*[:\-]?\s*((?:\d+\s*(?:A|A\s+)?\s*\d*\s*ANOS?)|NUEVO|USADO|PARA\s+ESTRENAR)",
+        source,
+    )
+    if not match:
+        return None
+
+    value = match.group(1).replace("ANOS", "años")
+    return smart_title(value)
+
+
+def extract_pisos_totales(text):
+    """
+    Total de pisos del edificio/casa, ej. "3 PISOS". Requiere plural para no
+    confundirse con "PISO 3" (que es la ubicacion del inmueble, no el total).
+    """
+    return extract_count(text, [r"(\d+)\s+PISOS\b"])
+
+
+def extract_piso_ubicacion(text):
+    """
+    Piso en el que queda el inmueble, ej. "PISO 3". Se guarda aparte (en el
+    JSON de detalles) para no mezclarlo con el total de pisos del edificio.
+    """
+    return extract_count(text, [r"\bPISO\s*[:\-]?\s*(\d+)\b"])
+
+
+def extract_images(parser, page_url):
+    image_urls = []
+    seen = set()
+    by_anuncio = {}
+
+    for image in parser.images:
+        src = image.get("src") or image.get("data-src")
+        if not src:
+            continue
+        full_url = urljoin(page_url, src)
+        if "/api/v1/anuncio/" not in full_url:
+            continue
+        match = re.search(r"/api/v1/anuncio/(\d+)/(imagen|thumb)", full_url)
+        key = match.group(1) if match else full_url
+        kind = match.group(2) if match else "imagen"
+        current = by_anuncio.get(key)
+        if not current or kind == "imagen":
+            by_anuncio[key] = full_url
+
+    for full_url in by_anuncio.values():
+        if full_url not in seen:
+            seen.add(full_url)
+            image_urls.append(full_url)
+
+    return image_urls
+
+
+def extract_publication_data(url, tipo_hint=None):
     print(f"[INFO] Extrayendo publicacion Amorel: {url}")
     html, final_url = fetch_url(url)
     parser = parse_html(html)
@@ -992,7 +974,7 @@ def extract_publication_data(url):
         print(f"[SKIP] Venta sin precio real en detalle: {title}")
         return None, html, [], "sin_precio"
 
-    tipo_inmueble = extract_property_type(title, category, full_detail_text)
+    tipo_inmueble = extract_property_type(title, category, full_detail_text, tipo_hint=tipo_hint)
     ciudad = extract_city(title, full_detail_text)
     edificio_conjunto = extract_conjunto_edificio(title, full_detail_text)
     barrio = (
@@ -1015,9 +997,12 @@ def extract_publication_data(url):
         "categoria_amorel": category,
         "fecha_amorel": published_at,
         "precio_detectado_desde_detalle": price,
+        "precio_negociable": is_price_negotiable(full_detail_text),
         "barrio_detectado": barrio,
         "ph_detectado": ph,
+        "piso_ubicacion": extract_piso_ubicacion(full_detail_text),
         "imagenes_detectadas": image_urls,
+        "subcategoria_origen": tipo_hint,
         "fuente_busqueda": SEARCH_URL,
     }
 
@@ -1039,7 +1024,7 @@ def extract_publication_data(url):
         "m2": extract_area(full_detail_text),
         "m2_construido": None,
         "antiguedad": extract_antiguedad(full_detail_text),
-        "pisos": extract_count(full_detail_text, [r"(\d+)\s+PISOS?", r"PISO\s*[:\-]?\s*(\d+)"]),
+        "pisos": extract_pisos_totales(full_detail_text),
         "habitaciones": extract_habitaciones(full_detail_text),
         "banios": extract_banios(full_detail_text),
         "parqueadero": extract_parqueaderos(full_detail_text),
@@ -1047,6 +1032,7 @@ def extract_publication_data(url):
         "notas": None,
     }
     return data, html, image_urls, None
+
 
 def get_connection():
     if mysql is None:
@@ -1262,13 +1248,14 @@ def download_images_parallel(image_urls, codigo_archivo, publicacion_id):
 
 
 def main():
-    print("[INFO] Iniciando scraper Amorel Pasto")
-    print(f"[INFO] SEARCH_URL: {SEARCH_URL}")
-    print(f"[INFO] AMOREL_MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
+    print("[INFO] Iniciando scraper Amorel Pasto (solo VENTAS)")
+    print(f"[INFO] SEARCH_URL base: {SEARCH_URL}")
+    print(f"[INFO] Subcategorias de venta a recorrer: {[s for s, _ in SALE_SUBCATEGORIES]}")
+    print(f"[INFO] AMOREL_MAX_PAGES (por subcategoria): {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
     print(f"[INFO] AMOREL_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
 
     publication_links, audit = collect_publication_links()
-    print(f"[INFO] Total links Amorel encontrados: {len(publication_links)}")
+    print(f"[INFO] Total links Amorel encontrados (solo venta): {len(publication_links)}")
 
     connection = get_connection()
     fuente_id = get_or_create_fuente_id(connection)
@@ -1278,11 +1265,11 @@ def main():
     total_omitidas = 0
     total_errores = 0
 
-    for index, link in enumerate(publication_links, start=1):
+    for index, (link, tipo_hint) in enumerate(publication_links, start=1):
         print(f"\n[INFO] Procesando Amorel {index}/{len(publication_links)}")
         print(f"[INFO] Link: {link}")
         try:
-            data, html, image_urls, skip_reason = extract_publication_data(link)
+            data, html, image_urls, skip_reason = extract_publication_data(link, tipo_hint=tipo_hint)
             if not data:
                 total_omitidas += 1
                 audit.record_omission(skip_reason or "sin_datos_extraidos", link)
