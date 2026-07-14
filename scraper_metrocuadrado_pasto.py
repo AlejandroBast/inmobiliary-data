@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from duplicate_detector import detect_duplicates_safely
 from scraper_audit import ScraperAudit
 
 
@@ -806,6 +807,10 @@ def main():
                 downloaded_images = download_images_parallel(image_urls, codigo_archivo, publicacion_id)
                 for _, image_url, image_path in downloaded_images:
                     insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
+
+                # La deteccion es posterior al guardado de evidencias y nunca
+                # bloquea la insercion normal si falta la migracion o Pillow.
+                detect_duplicates_safely(connection, publicacion_id)
 
                 print(f"[OK] Guardada publicacion nueva ID {publicacion_id}")
                 print(f"[OK] Codigo externo: {data['codigo_externo']}")
