@@ -4,7 +4,8 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, Play, Radar, Square } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 type SourceId = "fincaraiz" | "ciencuadras" | "metrocuadrado" | "amorel" | "facebook"
@@ -37,20 +38,35 @@ const sources: Array<{ id: SourceId; name: string; detail: string }> = [
 ]
 
 export function ScraperControlPanel() {
+  const router = useRouter()
   const [jobs, setJobs] = useState<Partial<Record<SourceId, Job>>>({})
   const [loading, setLoading] = useState(true)
+  const lastPublicationsRefresh = useRef(0)
+  const hadActiveScan = useRef(false)
 
   const refresh = useCallback(async () => {
     try {
       const response = await fetch("/api/scrapers", { cache: "no-store" })
       const data = (await response.json()) as { jobs: Job[] }
       setJobs(Object.fromEntries(data.jobs.map((job) => [job.sourceId, job])))
+
+      const hasActiveScan = data.jobs.some((job) => job.state === "running" || job.state === "cancelling")
+      const now = Date.now()
+      const scanJustFinished = hadActiveScan.current && !hasActiveScan
+
+      // router.refresh actualiza los Server Components y la tabla sin recargar
+      // la pestaña ni perder el estado local de los componentes cliente.
+      if (scanJustFinished || (hasActiveScan && now - lastPublicationsRefresh.current >= 4000)) {
+        lastPublicationsRefresh.current = now
+        router.refresh()
+      }
+      hadActiveScan.current = hasActiveScan
     } catch {
       // Se conserva el último estado visible si falla un sondeo puntual.
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [router])
 
   useEffect(() => {
     void refresh()
