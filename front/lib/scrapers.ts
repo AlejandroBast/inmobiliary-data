@@ -1,6 +1,7 @@
 import "server-only"
 
 import { spawn } from "node:child_process"
+import { existsSync } from "node:fs"
 import path from "node:path"
 
 export const SCRAPER_SOURCES = {
@@ -39,6 +40,22 @@ const jobs = globalForScrapers.scraperJobs ?? {}
 const processes = globalForScrapers.scraperProcesses ?? {}
 globalForScrapers.scraperJobs = jobs
 globalForScrapers.scraperProcesses = processes
+
+function splitCommand(value: string) {
+  const parts = value.match(/"[^"]+"|'[^']+'|\S+/g)?.map((part) => part.replace(/^["']|["']$/g, "")) ?? []
+  return { command: parts[0] ?? value, args: parts.slice(1) }
+}
+
+function resolvePythonCommand() {
+  const configured = process.env.SCRAPER_PYTHON?.trim()
+  if (configured) return splitCommand(configured)
+
+  if (process.platform === "win32") {
+    return { command: "py", args: ["-3"] }
+  }
+
+  return { command: "python3", args: [] }
+}
 
 function idleJob(sourceId: ScraperSourceId): ScraperJob {
   return {
@@ -95,7 +112,7 @@ export function startScraper(sourceId: ScraperSourceId) {
   const source = SCRAPER_SOURCES[sourceId]
   const projectDir = path.resolve(process.cwd(), "..")
   const scriptPath = path.join(projectDir, source.file)
-  const python = process.env.SCRAPER_PYTHON?.trim() || "python"
+  const python = resolvePythonCommand()
   const job: ScraperJob = {
     sourceId,
     state: "running",
@@ -112,8 +129,19 @@ export function startScraper(sourceId: ScraperSourceId) {
 
   jobs[sourceId] = job
 
+  if (!existsSync(scriptPath)) {
+    job.state = "error"
+    job.finishedAt = new Date().toISOString()
+    job.message = `No existe el script ${source.file}`
+    job.progress = 100
+    job.remainingSeconds = 0
+    appendOutput(job, `Ruta esperada: ${scriptPath}`)
+    return job
+  }
+
   try {
-    const child = spawn(python, [scriptPath], {
+    appendOutput(job, `Ejecutando: ${[python.command, ...python.args, scriptPath].join(" ")}`)
+    const child = spawn(python.command, [...python.args, scriptPath], {
       cwd: projectDir,
       env: { ...process.env, PYTHONUNBUFFERED: "1" },
       windowsHide: true,
@@ -143,7 +171,12 @@ export function startScraper(sourceId: ScraperSourceId) {
       }
       job.message = code === 0
         ? `Escaneo de ${source.name} terminado`
-        : `El escaneo terminó con código ${code ?? "desconocido"}`
+        : code === 9009
+          ? "No se encontro Python para ejecutar el scraper"
+          : `El escaneo termino con codigo ${code ?? "desconocido"}`
+      if (code === 9009) {
+        appendOutput(job, "En Windows el codigo 9009 significa que no se encontro el comando. Reinicia el front o define SCRAPER_PYTHON.")
+      }
     })
   } catch (error) {
     job.state = "error"
