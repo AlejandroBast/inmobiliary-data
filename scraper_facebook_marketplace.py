@@ -6,7 +6,7 @@ import re
 import time
 import unicodedata
 from pathlib import Path
-from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote_plus, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 try:
@@ -45,18 +45,31 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
 }
 
-DEFAULT_SEARCH_PHRASES = [
-    "venta casa pasto",
-    "vendo casa pasto",
-    "casa en venta pasto",
-    "venta apartamento pasto",
-    "apartamento en venta pasto",
-    "vendo apartamento pasto",
-    "venta lote pasto",
-    "lote en venta pasto",
-    "venta oficina pasto",
-    "venta local pasto",
-    "venta finca pasto",
+DEFAULT_MARKETPLACE_URLS = [
+    (
+        "https://www.facebook.com/marketplace/108037152563666/search/"
+        "?category_id=1270772586445798&query=Viviendas%20en%20venta"
+        "&referral_ui_component=category_menu_item"
+    ),
+]
+
+DEFAULT_PRICE_BUCKETS = [
+    (None, 80_000_000),
+    (80_000_000, 120_000_000),
+    (120_000_000, 160_000_000),
+    (160_000_000, 200_000_000),
+    (200_000_000, 250_000_000),
+    (250_000_000, 300_000_000),
+    (300_000_000, 350_000_000),
+    (350_000_000, 400_000_000),
+    (400_000_000, 500_000_000),
+    (500_000_000, 650_000_000),
+    (650_000_000, 800_000_000),
+    (800_000_000, 1_000_000_000),
+    (1_000_000_000, 1_500_000_000),
+    (1_500_000_000, 2_000_000_000),
+    (2_000_000_000, 3_000_000_000),
+    (3_000_000_000, None),
 ]
 
 USER_AGENT = (
@@ -73,7 +86,10 @@ DATE_LISTED_DAYS = os.getenv("FACEBOOK_DATE_LISTED_DAYS")
 MIN_PRICE_FILTER = os.getenv("FACEBOOK_MIN_PRICE")
 MAX_PRICE_FILTER = os.getenv("FACEBOOK_MAX_PRICE")
 MIN_SALE_PRICE = int(os.getenv("FACEBOOK_MIN_SALE_PRICE", "10000000"))
-MAX_SCROLLS = int(os.getenv("FACEBOOK_MAX_SCROLLS", "30"))
+TRUST_SALE_FILTERS = os.getenv("FACEBOOK_TRUST_SALE_FILTERS", "true").lower() in ("1", "true", "yes", "y")
+SPLIT_PRICE_BUCKETS = os.getenv("FACEBOOK_SPLIT_PRICE_BUCKETS", "true").lower() in ("1", "true", "yes", "y")
+INCLUDE_UNFILTERED_LISTING = os.getenv("FACEBOOK_INCLUDE_UNFILTERED_LISTING", "true").lower() in ("1", "true", "yes", "y")
+MAX_SCROLLS = int(os.getenv("FACEBOOK_MAX_SCROLLS", "80"))
 STALL_SCROLLS = int(os.getenv("FACEBOOK_STALL_SCROLLS", "4"))
 MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "0"))
 MAX_DETAILS = int(os.getenv("FACEBOOK_MAX_DETAILS", "0"))
@@ -206,6 +222,61 @@ def split_env_list(value):
     return [part.strip() for part in parts if part.strip()]
 
 
+def parse_price_buckets(value):
+    if not value:
+        return DEFAULT_PRICE_BUCKETS
+
+    buckets = []
+    for part in split_env_list(value):
+        match = re.match(r"^\s*([0-9_\.]*)\s*(?:-|:|\.\.)\s*([0-9_\.]*)\s*$", part)
+        if not match:
+            match = re.match(r"^\s*([0-9_\.]+)\s*\+\s*$", part)
+            if match:
+                min_raw, max_raw = match.group(1), ""
+            else:
+                print(f"[WARN] Rango de precio invalido en FACEBOOK_PRICE_BUCKETS: {part}")
+                continue
+        else:
+            min_raw, max_raw = match.group(1), match.group(2)
+
+        def parse_bound(raw):
+            cleaned = (raw or "").replace("_", "").replace(".", "").strip()
+            return int(cleaned) if cleaned else None
+
+        min_price = parse_bound(min_raw)
+        max_price = parse_bound(max_raw)
+        if min_price is None and max_price is None:
+            continue
+        if min_price is not None and max_price is not None and min_price >= max_price:
+            print(f"[WARN] Rango de precio omitido porque min >= max: {part}")
+            continue
+        buckets.append((min_price, max_price))
+
+    return buckets
+
+
+def set_url_params(url, updates):
+    parts = urlsplit(url)
+    params = dict(parse_qsl(parts.query, keep_blank_values=True))
+    for key, value in updates.items():
+        if value is None:
+            params.pop(key, None)
+        else:
+            params[key] = str(value)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
+
+
+def dedupe_urls(urls):
+    deduped = []
+    seen = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
 def clean_text(value):
     if value is None:
         return None
@@ -231,30 +302,49 @@ def get_lines(text):
 
 
 def get_search_phrases():
-    return split_env_list(os.getenv("FACEBOOK_SEARCH_PHRASES")) or DEFAULT_SEARCH_PHRASES
+    return split_env_list(os.getenv("FACEBOOK_SEARCH_PHRASES"))
 
 
 def build_search_urls():
     configured_urls = split_env_list(os.getenv("FACEBOOK_MARKETPLACE_URLS"))
     if configured_urls:
-        return configured_urls
+        base_urls = configured_urls
+
+    else:
+        phrases = get_search_phrases()
+        if not phrases:
+            base_urls = DEFAULT_MARKETPLACE_URLS
+        else:
+            urls = []
+            for phrase in phrases:
+                params = {"query": phrase}
+                if SEARCH_CATEGORY:
+                    params["category"] = SEARCH_CATEGORY
+                if SEARCH_RADIUS:
+                    params["radius"] = SEARCH_RADIUS
+                if DATE_LISTED_DAYS:
+                    params["daysSinceListed"] = DATE_LISTED_DAYS
+                if MIN_PRICE_FILTER:
+                    params["minPrice"] = MIN_PRICE_FILTER
+                if MAX_PRICE_FILTER:
+                    params["maxPrice"] = MAX_PRICE_FILTER
+                params["sortBy"] = "creation_time_descend"
+                urls.append(f"{BASE_URL}/marketplace/{quote_plus(SEARCH_CITY)}/search/?{urlencode(params)}")
+            base_urls = urls
+
+    if not SPLIT_PRICE_BUCKETS:
+        return dedupe_urls(base_urls)
 
     urls = []
-    for phrase in get_search_phrases():
-        params = {"query": phrase}
-        if SEARCH_CATEGORY:
-            params["category"] = SEARCH_CATEGORY
-        if SEARCH_RADIUS:
-            params["radius"] = SEARCH_RADIUS
-        if DATE_LISTED_DAYS:
-            params["daysSinceListed"] = DATE_LISTED_DAYS
-        if MIN_PRICE_FILTER:
-            params["minPrice"] = MIN_PRICE_FILTER
-        if MAX_PRICE_FILTER:
-            params["maxPrice"] = MAX_PRICE_FILTER
-        params["sortBy"] = "creation_time_descend"
-        urls.append(f"{BASE_URL}/marketplace/{quote_plus(SEARCH_CITY)}/search/?{urlencode(params)}")
-    return urls
+    for base_url in base_urls:
+        if INCLUDE_UNFILTERED_LISTING:
+            urls.append(base_url)
+        for min_price, max_price in parse_price_buckets(os.getenv("FACEBOOK_PRICE_BUCKETS")):
+            updates = {"sortBy": "creation_time_descend"}
+            updates["minPrice"] = min_price
+            updates["maxPrice"] = max_price
+            urls.append(set_url_params(base_url, updates))
+    return dedupe_urls(urls)
 
 
 def normalize_marketplace_link(raw_url):
@@ -275,7 +365,7 @@ def extract_marketplace_id(url):
 def create_audit(search_urls):
     search_url = " | ".join(search_urls[:5])
     if len(search_urls) > 5:
-        search_url += f" | +{len(search_urls) - 5} busquedas"
+        search_url += f" | +{len(search_urls) - 5} listados"
     return ScraperAudit(SOURCE_NAME, search_url=search_url)
 
 
@@ -391,14 +481,16 @@ def collect_publication_links(context):
     limit_reason = None
 
     for query_index, search_url in enumerate(search_urls, start=1):
-        print(f"\n[INFO] Busqueda Facebook {query_index}/{len(search_urls)}")
+        print(f"\n[INFO] Listado Facebook {query_index}/{len(search_urls)}")
         print(f"[INFO] URL: {search_url}")
+        listing_new_links = 0
+        listing_duplicate_links = 0
         try:
             goto_page(page, search_url)
             click_cookie_buttons(page)
             wait_for_manual_login_if_needed(page)
         except Exception as error:
-            reason = f"No se pudo abrir busqueda: {error}"
+            reason = f"No se pudo abrir listado: {error}"
             print(f"[WARN] {reason}")
             audit.record_page(f"q{query_index}", url=search_url, status="error", reason=reason)
             continue
@@ -427,10 +519,13 @@ def collect_publication_links(context):
                 seen.add(item_id)
                 all_links.append(link)
                 new_links += 1
+                listing_new_links += 1
 
                 if MAX_LINKS > 0 and len(all_links) >= MAX_LINKS:
-                    limit_reason = f"FACEBOOK_MAX_LINKS={MAX_LINKS} limito la busqueda."
+                    limit_reason = f"FACEBOOK_MAX_LINKS={MAX_LINKS} limito la recoleccion."
                     break
+
+            listing_duplicate_links += duplicate_links
 
             audit.record_page(
                 f"q{query_index}_scroll_{scroll_number}",
@@ -454,7 +549,7 @@ def collect_publication_links(context):
 
             if stall_count >= STALL_SCROLLS:
                 audit.add_note(
-                    f"Busqueda {query_index} detenida: {STALL_SCROLLS} scrolls seguidos sin links nuevos."
+                    f"Listado {query_index} detenido: {STALL_SCROLLS} scrolls seguidos sin links nuevos."
                 )
                 break
 
@@ -466,6 +561,12 @@ def collect_publication_links(context):
 
         if limit_reason:
             break
+
+        print(
+            f"[INFO] Listado {query_index} terminado: "
+            f"{listing_new_links} nuevos, {listing_duplicate_links} repetidos, "
+            f"{len(all_links)} acumulados"
+        )
 
     page.close()
     if limit_reason:
@@ -797,6 +898,8 @@ def is_sale_listing(title, description):
         return False, "no_es_venta_pura"
     if any(re.search(pattern, source) for pattern in SALE_PATTERNS):
         return True, None
+    if TRUST_SALE_FILTERS:
+        return True, None
     return False, "sin_palabra_venta"
 
 
@@ -909,17 +1012,58 @@ def extract_seller(page, body_text):
     return None
 
 
-def extract_image_urls(page):
+def extract_image_urls(page, listing_url=None):
+    current_item_id = extract_marketplace_id(listing_url)
     try:
         images = page.evaluate(
             """
-            () => Array.from(document.images).map((img) => ({
-                src: img.currentSrc || img.src || '',
-                width: img.naturalWidth || img.width || 0,
-                height: img.naturalHeight || img.height || 0,
-                alt: img.alt || ''
-            }))
-            """
+            (currentItemId) => {
+                const itemIdFromHref = (href) => {
+                    const match = String(href || '').match(/\\/marketplace\\/item\\/(\\d+)/)
+                    return match ? match[1] : null
+                }
+                const relatedMarkers = [
+                    'PUBLICACIONES RELACIONADAS',
+                    'RELATED LISTINGS',
+                    'MAS PUBLICACIONES DEL VENDEDOR',
+                    'MÁS PUBLICACIONES DEL VENDEDOR',
+                    'MORE FROM THIS SELLER',
+                    'MAS COMO ESTE',
+                    'MÁS COMO ESTE',
+                    'MORE LIKE THIS'
+                ]
+                let relatedTop = Number.POSITIVE_INFINITY
+                for (const element of document.querySelectorAll('span,h2,h3,div[role="heading"]')) {
+                    const text = (element.innerText || element.textContent || '').trim().toUpperCase()
+                    if (!text || !relatedMarkers.some((marker) => text.includes(marker))) continue
+                    const rect = element.getBoundingClientRect()
+                    if (rect.width > 0 && rect.height > 0) {
+                        relatedTop = Math.min(relatedTop, rect.top + window.scrollY)
+                    }
+                }
+
+                return Array.from(document.images).map((img) => {
+                    const rect = img.getBoundingClientRect()
+                    const itemAnchor = img.closest('a[href*="/marketplace/item/"]')
+                    const profileAnchor = img.closest('a[href*="/marketplace/profile/"],a[href*="/profile.php"],a[href*="/people/"]')
+                    const linkedItemId = itemAnchor ? itemIdFromHref(itemAnchor.href || itemAnchor.getAttribute('href')) : null
+                    const top = rect.top + window.scrollY
+                    return {
+                        src: img.currentSrc || img.src || '',
+                        width: img.naturalWidth || Math.round(rect.width) || img.width || 0,
+                        height: img.naturalHeight || Math.round(rect.height) || img.height || 0,
+                        alt: img.alt || '',
+                        top,
+                        area: Math.round((rect.width || 0) * (rect.height || 0)),
+                        linkedItemId,
+                        isOtherListing: Boolean(currentItemId && linkedItemId && linkedItemId !== currentItemId),
+                        isProfileImage: Boolean(profileAnchor),
+                        isBelowRelated: Number.isFinite(relatedTop) && top > relatedTop
+                    }
+                })
+            }
+            """,
+            current_item_id,
         )
     except Exception:
         images = []
@@ -932,11 +1076,13 @@ def extract_image_urls(page):
         height = int(image.get("height") or 0)
         if not src or src in seen:
             continue
+        if image.get("isOtherListing") or image.get("isProfileImage") or image.get("isBelowRelated"):
+            continue
         if "static.xx.fbcdn.net" in src or "emoji.php" in src or "rsrc.php" in src:
             continue
         if "fbcdn.net" not in src and "scontent" not in src:
             continue
-        if width < 120 or height < 120:
+        if width < 160 or height < 160:
             continue
         seen.add(src)
         image_urls.append(src)
@@ -999,7 +1145,7 @@ def extract_publication_data(page, link):
     barrio = extract_barrio(title, full_text)
     ciudad = extract_city(title, full_text)
     location = embedded.get("location") or extract_location(listing_text) or extract_location(body_text)
-    image_urls = extract_image_urls(page)
+    image_urls = extract_image_urls(page, link)
     seller = extract_seller(page, body_text)
 
     notes = {
@@ -1036,7 +1182,6 @@ def extract_publication_data(page, link):
         "banios": extract_count(full_text, [r"([0-9]+)\s+BA\S*OS?", r"([0-9]+)\s+BATH"]),
         "parqueadero": 1 if re.search(r"\b(GARAJE|PARQUEADERO|PARKING)\b", normalize_text(full_text)) else None,
         "administracion": None,
-        "notas": json.dumps(notes, ensure_ascii=False),
     }
     return data, html, image_urls, None
 
@@ -1152,14 +1297,14 @@ def insert_publicacion(connection, data):
             coordenadas, latitud, longitud, direccion, ciudad, barrio,
             tipo_inmueble, ph, estrato, descripcion, precio, m2,
             m2_construido, antiguedad, pisos, habitaciones, banios,
-            parqueadero, administracion, notas
+            parqueadero, administracion
         )
         VALUES (
             %(fuente_id)s, %(codigo_externo)s, %(link_origen)s, %(links_adicionales)s,
             %(coordenadas)s, %(latitud)s, %(longitud)s, %(direccion)s, %(ciudad)s, %(barrio)s,
             %(tipo_inmueble)s, %(ph)s, %(estrato)s, %(descripcion)s, %(precio)s, %(m2)s,
             %(m2_construido)s, %(antiguedad)s, %(pisos)s, %(habitaciones)s, %(banios)s,
-            %(parqueadero)s, %(administracion)s, %(notas)s
+            %(parqueadero)s, %(administracion)s
         )
         """,
         data,
@@ -1297,6 +1442,8 @@ def main():
     print(f"[INFO] FACEBOOK_DRY_RUN: {DRY_RUN}")
     print(f"[INFO] FACEBOOK_MAX_SCROLLS: {MAX_SCROLLS}")
     print(f"[INFO] FACEBOOK_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
+    print(f"[INFO] FACEBOOK_SPLIT_PRICE_BUCKETS: {SPLIT_PRICE_BUCKETS}")
+    print(f"[INFO] Listados Facebook planeados: {len(build_search_urls())}")
     print(f"[INFO] Perfil Chromium: {PROFILE_DIR.resolve()}")
 
     connection = None
