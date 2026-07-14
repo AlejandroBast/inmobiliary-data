@@ -3,7 +3,7 @@
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Check, CheckCircle2, CircleAlert, Clock3, LoaderCircle, Play, Radar, Square } from "lucide-react"
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, Play, Radar, Square } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { toast } from "sonner"
 
@@ -139,20 +139,19 @@ export function ScraperControlPanel() {
                 </div>
               </div>
               <p className="mt-5 line-clamp-2 min-h-8 text-xs font-medium text-muted-foreground">{loading ? "Consultando estado..." : job?.message || "Listo para escanear"}</p>
-              <div className="mt-4 space-y-2.5">
+              {(running || cancelling) && <div className="mt-4 space-y-2.5">
                 <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200/70 dark:bg-white/10 dark:ring-white/5" role="progressbar" aria-label={`Progreso de ${source.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={job?.progress ?? 0}>
                   <div
-                    className={`h-full rounded-full transition-[width,background-color] duration-700 ease-out ${failed ? "bg-destructive" : running ? "bg-gradient-to-r from-emerald-500 to-emerald-400" : success ? "bg-emerald-500" : "bg-slate-300 dark:bg-slate-600"}`}
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-[width,background-color] duration-700 ease-out"
                     style={{ width: `${job?.progress ?? 0}%` }}
                   />
-                  {success && <span className="absolute inset-y-0 right-1 flex items-center text-white"><Check className="size-2.5 stroke-[3]" /></span>}
                 </div>
                 <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
                   <span>{job?.progress ?? 0}%</span>
-                  {running ? <span>Restante aprox. {formatDuration(job?.remainingSeconds ?? null)}</span> : success ? <span>Duración {formatDuration(job?.elapsedSeconds ?? 0)}</span> : <span>Sin iniciar</span>}
+                  {cancelling ? <span>Cerrando proceso...</span> : <span>Restante aprox. {formatDuration(job?.remainingSeconds ?? null)}</span>}
                 </div>
                 {running && <p className="text-[11px] text-muted-foreground">Transcurrido exacto: {formatDuration(job?.elapsedSeconds ?? 0)}</p>}
-              </div>
+              </div>}
               {running || cancelling ? (
                 <Button className="mt-auto w-full gap-2 border-red-200 text-red-600 hover:border-red-300 hover:bg-red-50 hover:text-red-700 dark:border-red-400/30 dark:text-red-300 dark:hover:bg-red-400/10" variant="outline" disabled={cancelling} onClick={() => void cancel(source.id, source.name)}>
                   {cancelling ? <LoaderCircle className="size-3.5 animate-spin" /> : <Square className="size-3.5 fill-current" />}

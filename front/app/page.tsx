@@ -9,6 +9,7 @@ import { AppShell } from "@/components/app-shell"
 import { PublicacionesDataLayout } from "@/components/publicaciones-data-layout"
 import { PublicacionesManagerPro } from "@/components/publicaciones-manager-pro"
 import { PublicacionesFiltrosPro } from "@/components/publicaciones-filtros-pro"
+import { ScraperControlPanel } from "@/components/scraper-control-panel"
 import { buttonVariants } from "@/components/ui/button"
 import { Building2, Download, LayoutDashboard } from "lucide-react"
 import Link from "next/link"
@@ -105,6 +106,7 @@ export default async function Page({
         </>
       }
     >
+      <ScraperControlPanel />
       <PublicacionesDataLayout
         activeFilterCount={totalFiltrosActivos}
         filterPanel={
