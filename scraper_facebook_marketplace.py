@@ -83,6 +83,9 @@ REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "1.0"))
 LOGIN_WAIT_SECONDS = int(os.getenv("FACEBOOK_LOGIN_WAIT_SECONDS", "90"))
 PAGE_TIMEOUT_MS = int(os.getenv("FACEBOOK_PAGE_TIMEOUT_MS", "45000"))
 PROFILE_DIR = Path(os.getenv("FACEBOOK_USER_DATA_DIR", ".facebook_profile"))
+SESSION_COOKIES_PATH = Path(
+    os.getenv("FACEBOOK_SESSION_COOKIES_PATH", str(PROFILE_DIR / "session_cookies.json"))
+)
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR = Path("logs")
@@ -350,6 +353,27 @@ def extract_links_from_page(page):
     return links
 
 
+def export_session_cookies(context):
+    """Guarda las cookies de la sesion activa de Facebook para que el front
+    (validador de links) pueda reutilizarlas en lugar de golpear el muro de
+    login. Se llama solo cuando ya confirmamos que la sesion esta autenticada,
+    asi que nunca persiste un estado "deslogueado" por error."""
+    try:
+        cookies = [
+            cookie for cookie in context.cookies()
+            if "facebook.com" in (cookie.get("domain") or "")
+        ]
+        if not cookies:
+            return
+        SESSION_COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"exported_at": time.time(), "cookies": cookies}
+        with open(SESSION_COOKIES_PATH, "w", encoding="utf-8") as file:
+            json.dump(payload, file, ensure_ascii=False)
+        print(f"[INFO] Cookies de sesion Facebook exportadas a {SESSION_COOKIES_PATH}")
+    except Exception as error:
+        print(f"[WARN] No se pudo exportar cookies de sesion: {error}")
+
+
 def collect_publication_links(context):
     search_urls = build_search_urls()
     audit = create_audit(search_urls)
@@ -384,6 +408,9 @@ def collect_publication_links(context):
             print(f"[WARN] {reason}")
             audit.record_page(f"q{query_index}", url=search_url, status="error", reason=reason)
             continue
+
+        if query_index == 1:
+            export_session_cookies(context)
 
         stall_count = 0
         for scroll_number in range(1, MAX_SCROLLS + 1):
