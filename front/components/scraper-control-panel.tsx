@@ -119,6 +119,7 @@ export function ScraperControlPanel() {
           const cancelling = job?.state === "cancelling"
           const success = job?.state === "success"
           const failed = job?.state === "error"
+          const recentOutput = job?.output?.slice(-3) ?? []
 
           return (
             <div
@@ -139,6 +140,11 @@ export function ScraperControlPanel() {
                 </div>
               </div>
               <p className="mt-5 line-clamp-2 min-h-8 text-xs font-medium text-muted-foreground">{loading ? "Consultando estado..." : job?.message || "Listo para escanear"}</p>
+              {recentOutput.length > 0 && (
+                <pre className="mt-3 max-h-20 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 p-2 text-[11px] leading-relaxed text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
+                  {recentOutput.join("\n")}
+                </pre>
+              )}
               {(running || cancelling) && <div className="mt-4 space-y-2.5">
                 <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100 ring-1 ring-inset ring-slate-200/70 dark:bg-white/10 dark:ring-white/5" role="progressbar" aria-label={`Progreso de ${source.name}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={job?.progress ?? 0}>
                   <div
