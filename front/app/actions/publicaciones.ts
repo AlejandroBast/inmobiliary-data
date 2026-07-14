@@ -1,8 +1,9 @@
 "use server"
 
-import { db } from "@/lib/db"
+import { db, pool } from "@/lib/db"
 import { fuentesInmobiliarias, publicaciones } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
+import type { RowDataPacket } from "mysql2"
 import { revalidatePath } from "next/cache"
 
 export type PublicacionFilters = {
@@ -68,6 +69,30 @@ export type PublicacionLinkStatus = {
   ok: boolean
   checkedAt: string
   links: PublicacionLinkCheck[]
+}
+
+export type CoincidenciaPublicacion = {
+  id: number
+  publicacionRelacionadaId: number
+  puntaje: number
+  estado: "pendiente" | "confirmada" | "descartada"
+  imagenesCoincidentes: number
+  distanciaMetros: number | null
+  fuenteRelacionada: string | null
+  precioRelacionado: string
+}
+
+interface CoincidenciaRow extends RowDataPacket {
+  id: number
+  publicacionId: number
+  candidataId: number
+  puntaje: string | number
+  estado: "pendiente" | "confirmada" | "descartada"
+  imagenesCoincidentes: number
+  distanciaMetros: string | number | null
+  relacionadaId: number
+  precioRelacionado: string | number
+  fuenteRelacionada: string | null
 }
 
 function cleanFilter(value?: string | null) {
@@ -303,6 +328,68 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     .orderBy(desc(publicaciones.fechaCaptura))
 
   return query
+}
+
+export async function getCoincidenciasPublicaciones(publicacionIds: number[]) {
+  const ids = [...new Set(publicacionIds.filter((id) => Number.isInteger(id) && id > 0))]
+  const grouped: Record<number, CoincidenciaPublicacion[]> = {}
+  if (ids.length === 0) return grouped
+
+  const placeholders = ids.map(() => "?").join(", ")
+  const [rows] = await pool.query<CoincidenciaRow[]>(
+    `SELECT
+       cp.id,
+       cp.publicacion_id AS publicacionId,
+       cp.candidata_id AS candidataId,
+       cp.puntaje,
+       cp.estado,
+       cp.imagenes_coincidentes AS imagenesCoincidentes,
+       cp.distancia_metros AS distanciaMetros,
+       relacionada.id AS relacionadaId,
+       relacionada.precio AS precioRelacionado,
+       fuente.nombre AS fuenteRelacionada
+     FROM coincidencias_publicaciones cp
+     JOIN publicaciones relacionada
+       ON relacionada.id = CASE
+         WHEN cp.publicacion_id IN (${placeholders}) THEN cp.candidata_id
+         ELSE cp.publicacion_id
+       END
+     LEFT JOIN fuentes_inmobiliarias fuente ON fuente.id = relacionada.fuente_id
+     WHERE cp.estado <> 'descartada'
+       AND (cp.publicacion_id IN (${placeholders}) OR cp.candidata_id IN (${placeholders}))
+     ORDER BY cp.estado = 'confirmada' DESC, cp.puntaje DESC`,
+    [...ids, ...ids, ...ids],
+  )
+
+  const visibleIds = new Set(ids)
+  for (const row of rows) {
+    const sides = [Number(row.publicacionId), Number(row.candidataId)]
+    for (const currentId of sides) {
+      if (!visibleIds.has(currentId)) continue
+      const relatedId = currentId === Number(row.publicacionId)
+        ? Number(row.candidataId)
+        : Number(row.publicacionId)
+      const related = relatedId === Number(row.relacionadaId)
+        ? row
+        : null
+
+      // La consulta calcula la relacionada desde un lado visible. Si ambos lados
+      // estan visibles, se completa el precio/fuente desde la lista en el cliente.
+      grouped[currentId] ??= []
+      grouped[currentId].push({
+        id: Number(row.id),
+        publicacionRelacionadaId: relatedId,
+        puntaje: Number(row.puntaje),
+        estado: row.estado,
+        imagenesCoincidentes: Number(row.imagenesCoincidentes ?? 0),
+        distanciaMetros: row.distanciaMetros == null ? null : Number(row.distanciaMetros),
+        fuenteRelacionada: related?.fuenteRelacionada ?? null,
+        precioRelacionado: String(related?.precioRelacionado ?? ""),
+      })
+    }
+  }
+
+  return grouped
 }
 
 function normalizeStoredLinks(input: PublicacionLinkValidationInput) {
