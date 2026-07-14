@@ -1,5 +1,6 @@
 """Analiza publicaciones historicas de forma incremental y reanudable."""
 
+import argparse
 import os
 
 import mysql.connector
@@ -20,6 +21,15 @@ DB_CONFIG = {
 BATCH_SIZE = int(os.getenv("DUPLICATE_BACKFILL_BATCH_SIZE", "100"))
 
 
+def reset_automatic_results(connection):
+    """Elimina solo resultados derivados; nunca publicaciones ni evidencias."""
+    cursor = connection.cursor()
+    cursor.execute("DELETE FROM inmuebles_detectados")
+    cursor.execute("DELETE FROM coincidencias_publicaciones WHERE estado <> 'descartada'")
+    connection.commit()
+    cursor.close()
+
+
 def pending_publication_ids(connection):
     cursor = connection.cursor()
     cursor.execute(
@@ -37,8 +47,18 @@ def pending_publication_ids(connection):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Recalcula coincidencias de publicaciones")
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="limpia resultados automaticos anteriores antes de recalcular",
+    )
+    args = parser.parse_args()
     connection = mysql.connector.connect(**DB_CONFIG)
     try:
+        if args.rebuild:
+            reset_automatic_results(connection)
+            print("[INFO] Resultados automaticos anteriores limpiados")
         publication_ids = pending_publication_ids(connection)
         print(f"[INFO] Publicaciones con imagenes por analizar: {len(publication_ids)}")
         for start in range(0, len(publication_ids), BATCH_SIZE):
@@ -52,4 +72,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
