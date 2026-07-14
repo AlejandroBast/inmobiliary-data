@@ -24,6 +24,7 @@ except ImportError:
     def load_dotenv():
         return None
 
+from duplicate_detector import detect_duplicates_safely
 from scraper_audit import ScraperAudit
 
 
@@ -1324,6 +1325,8 @@ def main():
             print(f"[INFO] Imagenes detectadas: {len(image_urls)}")
             for _, image_url, image_path in download_images_parallel(image_urls, codigo_archivo, publicacion_id):
                 insert_evidencia(connection, publicacion_id, "imagen", image_path, image_url)
+
+            detect_duplicates_safely(connection, publicacion_id)
 
             print(f"[OK] Guardada publicacion Amorel ID {publicacion_id}")
             print(f"[OK] Codigo externo: {data['codigo_externo']}")
