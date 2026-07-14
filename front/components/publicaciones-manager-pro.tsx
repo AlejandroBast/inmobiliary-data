@@ -27,6 +27,7 @@ import {
   deletePublicacion,
   updateNotaPublicacion,
   validatePublicacionLinks,
+  type CoincidenciaPublicacion,
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
 import { PublicacionForm } from "@/components/publicacion-form"
@@ -53,7 +54,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
-type Row = Record<string, any> & { id: number }
+type Row = Record<string, any> & { id: number; coincidencias?: CoincidenciaPublicacion[] }
 type ImageItem = { name: string; src: string }
 type HtmlItem = { name: string; src: string }
 
@@ -99,6 +100,12 @@ function rowLinks(publicacion: Row) {
     linkOrigen: publicacion.linkOrigen ?? null,
     linksAdicionales: publicacion.linksAdicionales ?? null,
   }
+}
+
+function duplicateLabel(coincidencias: CoincidenciaPublicacion[]) {
+  const confirmed = coincidencias.filter((item) => item.estado === "confirmada").length
+  if (confirmed) return `${confirmed} repetida${confirmed === 1 ? "" : "s"}`
+  return `${coincidencias.length} posible${coincidencias.length === 1 ? "" : "s"}`
 }
 
 export function PublicacionesManagerPro({
@@ -321,6 +328,8 @@ export function PublicacionesManagerPro({
                       "cursor-pointer transition-colors hover:bg-emerald-50/70 dark:hover:bg-emerald-400/10",
                       linkStatuses[p.id]?.ok === false
                         ? "border-red-300 bg-red-50/80 hover:bg-red-100/80 dark:border-red-400/40 dark:bg-red-950/35 dark:hover:bg-red-950/50"
+                        : p.coincidencias?.length
+                          ? "border-amber-300 bg-amber-50/70 hover:bg-amber-100/70 dark:border-amber-400/30 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
                         : index % 2 === 0
                           ? "bg-background dark:bg-zinc-950/30"
                           : "bg-slate-50/45 dark:bg-white/[0.025]",
@@ -331,6 +340,12 @@ export function PublicacionesManagerPro({
                     <TableCell>
                       <div className="font-medium">{p.tipoInmueble || "Inmueble"}</div>
                       {p.codigoExterno && <div className="text-xs text-muted-foreground">{p.codigoExterno}</div>}
+                      {!!p.coincidencias?.length && (
+                        <Badge className="mt-1 gap-1 bg-amber-500 text-white hover:bg-amber-500">
+                          <AlertTriangle className="size-3" />
+                          {duplicateLabel(p.coincidencias)}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="text-sm font-medium">{barrioLabel(p.barrio)}</div>
@@ -420,6 +435,44 @@ export function PublicacionesManagerPro({
                 </DialogTitle>
                 <DialogDescription>Capturado el {formatDate(detail.fechaCaptura)}</DialogDescription>
               </DialogHeader>
+
+              {!!detail.coincidencias?.length && (
+                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-300" />
+                    <div>
+                      <p className="font-semibold">Esta publicacion puede estar repetida</p>
+                      <p className="text-xs opacity-80">El comparador encontro imagenes, ubicacion o caracteristicas coincidentes.</p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {detail.coincidencias.map((coincidencia) => (
+                      <div key={coincidencia.id} className="flex flex-col gap-2 rounded-md border border-amber-200 bg-white/70 p-3 dark:border-amber-400/20 dark:bg-black/10 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-sm">
+                          <span className="font-semibold">Publicacion #{coincidencia.publicacionRelacionadaId}</span>
+                          <span className="ml-2">{coincidencia.puntaje}% de coincidencia</span>
+                          <div className="text-xs opacity-75">
+                            {coincidencia.estado === "confirmada" ? "Coincidencia confirmada" : "Pendiente de revision"}
+                            {coincidencia.imagenesCoincidentes > 0 ? ` · ${coincidencia.imagenesCoincidentes} imagen(es)` : ""}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const related = publicaciones.find((item) => item.id === coincidencia.publicacionRelacionadaId)
+                            if (related) setDetail(related)
+                            else router.push(`/?id=${coincidencia.publicacionRelacionadaId}`)
+                          }}
+                        >
+                          Ver relacionada
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
                 <Detail label="Precio" value={formatCOP(detail.precio)} />
