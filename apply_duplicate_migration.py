@@ -32,6 +32,31 @@ def main():
                 for warning in cursor.fetchall():
                     print(f"[MYSQL] {warning}")
                 raise
+
+        cursor.execute(
+            """SELECT COUNT(*) FROM information_schema.columns
+               WHERE table_schema = DATABASE()
+                 AND table_name = 'imagenes_hashes'
+                 AND column_name = 'hash_contenido'"""
+        )
+        if cursor.fetchone()[0] == 0:
+            exact_hash_migration = (
+                Path(__file__).with_name("migrations") / "002_exact_image_hash.sql"
+            )
+            cursor.execute(exact_hash_migration.read_text(encoding="utf-8").strip().rstrip(";"))
+        cursor.execute(
+            """SELECT character_maximum_length, is_nullable, collation_name
+               FROM information_schema.columns
+               WHERE table_schema = DATABASE()
+                 AND table_name = 'imagenes_hashes'
+                 AND column_name = 'hash_contenido'"""
+        )
+        exact_hash_column = cursor.fetchone()
+        if exact_hash_column != (64, "YES", "ascii_bin"):
+            cursor.execute(
+                """ALTER TABLE imagenes_hashes MODIFY COLUMN hash_contenido
+                   CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL"""
+            )
         connection.commit()
         cursor.execute(
             """SELECT COUNT(*) FROM information_schema.tables
@@ -42,6 +67,13 @@ def main():
                  )"""
         )
         print(f"[OK] Tablas del detector disponibles: {cursor.fetchone()[0]}/4")
+        cursor.execute(
+            """SELECT COUNT(*) FROM information_schema.columns
+               WHERE table_schema = DATABASE()
+                 AND table_name = 'imagenes_hashes'
+                 AND column_name = 'hash_contenido'"""
+        )
+        print(f"[OK] Hash SHA-256 disponible: {'si' if cursor.fetchone()[0] else 'no'}")
     except Exception:
         connection.rollback()
         raise
