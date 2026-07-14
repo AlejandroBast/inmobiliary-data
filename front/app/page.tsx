@@ -1,5 +1,6 @@
 import {
   getBarrios,
+  getCoincidenciasPublicaciones,
   getFuentes,
   getPublicaciones,
   type PublicacionFilters,
@@ -73,6 +74,11 @@ export default async function Page({
     getFuentes(),
     getBarrios(),
   ])
+  const coincidencias = await getCoincidenciasPublicaciones(publicaciones.map((publicacion) => publicacion.id))
+  const publicacionesConCoincidencias = publicaciones.map((publicacion) => ({
+    ...publicacion,
+    coincidencias: coincidencias[publicacion.id] ?? [],
+  }))
 
   const filtrosActivos = hasActiveFilters(filtros)
   const totalFiltrosActivos = activeFilterCount(filtros)
@@ -125,7 +131,7 @@ export default async function Page({
       >
         <section id="publicaciones" className="min-w-0">
           <PublicacionesManagerPro
-            publicaciones={publicaciones}
+            publicaciones={publicacionesConCoincidencias}
             fuentes={fuentes}
             hasActiveFilters={filtrosActivos}
           />
