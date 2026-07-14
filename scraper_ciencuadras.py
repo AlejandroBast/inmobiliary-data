@@ -26,6 +26,17 @@ load_dotenv()
 SEARCH_URL = "https://www.ciencuadras.com/venta/pasto"
 BASE_URL = "https://www.ciencuadras.com"
 
+# --- INICIO CAMBIO: contenedor real de la paginacion ---
+# Confirmado con inspeccion en vivo (dump_pagination_html.py):
+#   - ul.pagination.desktop  -> visible, es la que un usuario real clickea
+#   - ul.pagination.mobile   -> oculta (display:none / no visible), duplicada
+# El panel de Filtros (Habitaciones/Banos/Parqueadero/Estrato) usa
+# <label class="multiplenumber__FillItem" data-qa-id="cc-rs-rs-option_..."> con
+# el mismo texto "1","2","3"... por eso NUNCA se debe buscar por texto en
+# toda la pagina: hay que escopar siempre a este selector.
+PAGINATION_CONTAINER_SELECTOR = "ul.pagination.desktop"
+# --- FIN CAMBIO ---
+
 DB_CONFIG = {
     "host": os.getenv("DB_HOST", "localhost"),
     "port": int(os.getenv("DB_PORT", "3306")),
@@ -193,6 +204,11 @@ def extract_title_parts(title):
     """
     Extrae datos del h1 cuando viene con formato:
     "Casa en venta, El dorado"
+
+    Esta sigue siendo la UNICA fuente para tipo_inmueble y barrio
+    (a peticion explicita: el subtitulo "Pasto, Comuna X, Barrio" que
+    ciencuadras genera debajo del h1 no es confiable porque muchos
+    anunciantes lo dejan en su valor por defecto).
     """
 
     title = clean_text(title)
@@ -1162,131 +1178,103 @@ def wait_for_links_change(page, old_signature, timeout_seconds=12):
     return False
 
 
+# --- INICIO CAMBIO: paginacion escopada, ya no rastrea toda la pagina ---
+def get_active_pagination_number(page):
+    """
+    Lee que numero de pagina esta marcado como activo ahora mismo,
+    segun ul.pagination.desktop > li.active
+    """
+
+    try:
+        text = page.locator(
+            f"{PAGINATION_CONTAINER_SELECTOR} li.active"
+        ).first.inner_text(timeout=3000)
+
+        return parse_int(text)
+    except Exception:
+        return None
+
+
 def click_pagination_number(page, page_number):
+    """
+    Hace click en el numero de pagina dentro del contenedor real de
+    paginacion (ul.pagination.desktop), NUNCA en toda la pagina.
+
+    Esto evita el bug confirmado: el panel de Filtros (Habitaciones,
+    Banos, Parqueadero, Estrato) usa exactamente el mismo texto
+    ("1","2","3"...) en <label class="multiplenumber__FillItem">, y
+    buscar por texto en document completo puede terminar aplicando un
+    filtro en vez de cambiar de pagina.
+    """
+
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
-        locator = page.get_by_text(str(page_number), exact=True)
-        count = locator.count()
+        container = page.locator(PAGINATION_CONTAINER_SELECTOR).first
 
-        for index in reversed(range(count)):
-            item = locator.nth(index)
+        if container.count() == 0:
+            print("[WARN] No se encontró ul.pagination.desktop en la página.")
+            return False
 
-            try:
-                box = item.bounding_box()
+        item = container.locator("li").filter(
+            has_text=re.compile(rf"^\s*{re.escape(str(page_number))}\s*$")
+        ).first
 
-                if not box:
-                    continue
+        if item.count() == 0:
+            print(f"[WARN] No se encontró el <li> de la página {page_number} en la paginación.")
+            return False
 
-                item.scroll_into_view_if_needed(timeout=3000)
-                page.wait_for_timeout(250)
-                item.click(timeout=3000, force=True)
+        item.scroll_into_view_if_needed(timeout=3000)
+        page.wait_for_timeout(250)
+        item.click(timeout=3000)
 
-                if wait_for_links_change(page, old_signature):
-                    return True
+        links_changed = wait_for_links_change(page, old_signature)
+        active_page = get_active_pagination_number(page)
 
-            except Exception:
-                continue
-
-    except Exception:
-        pass
-
-    try:
-        clicked = page.evaluate(
-            """
-            (pageNumber) => {
-                const isVisible = (el) => {
-                    const rect = el.getBoundingClientRect();
-                    const style = window.getComputedStyle(el);
-
-                    return rect.width > 0
-                        && rect.height > 0
-                        && style.visibility !== 'hidden'
-                        && style.display !== 'none';
-                };
-
-                const elements = Array.from(
-                    document.querySelectorAll('span, li, button, a, div, [role="button"]')
-                );
-
-                const candidates = elements.filter(el => {
-                    const text = (el.innerText || el.textContent || '').trim();
-                    return text === String(pageNumber) && isVisible(el);
-                });
-
-                if (!candidates.length) {
-                    return false;
-                }
-
-                candidates.sort((a, b) => {
-                    return b.getBoundingClientRect().top - a.getBoundingClientRect().top;
-                });
-
-                for (const el of candidates) {
-                    const clickable = el.closest('button, a, [role="button"], li') || el;
-
-                    try {
-                        clickable.scrollIntoView({ block: 'center' });
-
-                        clickable.dispatchEvent(new MouseEvent('mouseover', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        }));
-
-                        clickable.dispatchEvent(new MouseEvent('mousedown', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        }));
-
-                        clickable.dispatchEvent(new MouseEvent('mouseup', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        }));
-
-                        clickable.dispatchEvent(new MouseEvent('click', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        }));
-
-                        return true;
-
-                    } catch (error) {
-                        continue;
-                    }
-                }
-
-                return false;
-            }
-            """,
-            page_number
-        )
-
-        if clicked and wait_for_links_change(page, old_signature):
+        # Doble verificación: los links cambiaron Y la paginación
+        # realmente marca como activa la página que pedimos.
+        if links_changed and active_page == page_number:
             return True
 
-    except Exception:
-        pass
+        if links_changed and active_page is not None and active_page != page_number:
+            print(
+                f"[WARN] Se hizo click en página {page_number} pero la "
+                f"paginación quedó marcando la página {active_page}. "
+                "Se descarta este intento por seguridad."
+            )
+            return False
 
-    return False
+        return links_changed
+
+    except Exception as error:
+        print(f"[WARN] Error haciendo click en página {page_number}: {error}")
+        return False
 
 
 def click_next_page(page):
+    """
+    Click en el botón/flecha "siguiente" DENTRO del contenedor real
+    de paginación (mismo motivo que click_pagination_number: evitar
+    cualquier colisión con el panel de Filtros u otros controles).
+    """
+
     old_signature = links_signature(page)
 
     page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
     page.wait_for_timeout(SCROLL_WAIT_MS)
 
     try:
-        clicked = page.evaluate(
+        container = page.locator(PAGINATION_CONTAINER_SELECTOR).first
+
+        if container.count() == 0:
+            return False
+
+        clicked = container.evaluate(
             """
-            () => {
+            (root) => {
                 const isVisible = (el) => {
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
@@ -1298,17 +1286,22 @@ def click_next_page(page):
                 };
 
                 const elements = Array.from(
-                    document.querySelectorAll('button, a, span, li, div, [role="button"]')
+                    root.querySelectorAll('li, a, button, span, [role="button"]')
                 );
 
                 const candidates = elements.filter(el => {
                     const text = (el.innerText || el.textContent || '').trim().toLowerCase();
                     const aria = (el.getAttribute('aria-label') || '').toLowerCase();
                     const title = (el.getAttribute('title') || '').toLowerCase();
+                    const cls = (el.getAttribute('class') || '').toLowerCase();
 
                     const looksNext =
                         text === '>' ||
+                        text === '›' ||
                         text.includes('siguiente') ||
+                        text.includes('next') ||
+                        cls.includes('next') ||
+                        cls.includes('chevron-right') ||
                         aria.includes('siguiente') ||
                         aria.includes('next') ||
                         title.includes('siguiente') ||
@@ -1321,15 +1314,9 @@ def click_next_page(page):
                     return false;
                 }
 
-                candidates.sort((a, b) => {
-                    return b.getBoundingClientRect().top - a.getBoundingClientRect().top;
-                });
-
                 const el = candidates[0];
-                const clickable = el.closest('button, a, [role="button"], li') || el;
-
-                clickable.scrollIntoView({ block: 'center' });
-                clickable.click();
+                el.scrollIntoView({ block: 'center' });
+                el.click();
 
                 return true;
             }
@@ -1339,10 +1326,11 @@ def click_next_page(page):
         if clicked and wait_for_links_change(page, old_signature):
             return True
 
-    except Exception:
-        pass
+    except Exception as error:
+        print(f"[WARN] Error haciendo click en 'siguiente': {error}")
 
     return False
+# --- FIN CAMBIO ---
 
 
 def collect_publication_links(page):
