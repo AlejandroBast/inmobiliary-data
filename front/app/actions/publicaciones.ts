@@ -21,6 +21,7 @@ export type PublicacionFilters = {
   m2Max?: string | null
   phTipo?: string | null
   parqueadero?: string | null
+  duplicados?: string | null
 }
 
 export type PublicacionInput = {
@@ -90,9 +91,10 @@ interface CoincidenciaRow extends RowDataPacket {
   estado: "pendiente" | "confirmada" | "descartada"
   imagenesCoincidentes: number
   distanciaMetros: string | number | null
-  relacionadaId: number
-  precioRelacionado: string | number
-  fuenteRelacionada: string | null
+  precioPublicacion: string | number
+  precioCandidata: string | number
+  fuentePublicacion: string | null
+  fuenteCandidata: string | null
 }
 
 function cleanFilter(value?: string | null) {
@@ -290,6 +292,28 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     }
   }
 
+  const duplicados = cleanFilter(filters.duplicados)
+  if (duplicados === "con") {
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM coincidencias_publicaciones cp
+      WHERE (cp.publicacion_id = ${publicaciones.id} OR cp.candidata_id = ${publicaciones.id})
+        AND cp.estado <> 'descartada'
+    )`)
+  } else if (duplicados === "confirmadas" || duplicados === "pendientes") {
+    const estado = duplicados === "confirmadas" ? "confirmada" : "pendiente"
+    conditions.push(sql`EXISTS (
+      SELECT 1 FROM coincidencias_publicaciones cp
+      WHERE (cp.publicacion_id = ${publicaciones.id} OR cp.candidata_id = ${publicaciones.id})
+        AND cp.estado = ${estado}
+    )`)
+  } else if (duplicados === "sin") {
+    conditions.push(sql`NOT EXISTS (
+      SELECT 1 FROM coincidencias_publicaciones cp
+      WHERE (cp.publicacion_id = ${publicaciones.id} OR cp.candidata_id = ${publicaciones.id})
+        AND cp.estado <> 'descartada'
+    )`)
+  }
+
   const query = db
     .select({
       id: publicaciones.id,
@@ -345,20 +369,19 @@ export async function getCoincidenciasPublicaciones(publicacionIds: number[]) {
        cp.estado,
        cp.imagenes_coincidentes AS imagenesCoincidentes,
        cp.distancia_metros AS distanciaMetros,
-       relacionada.id AS relacionadaId,
-       relacionada.precio AS precioRelacionado,
-       fuente.nombre AS fuenteRelacionada
+       publicacion.precio AS precioPublicacion,
+       candidata.precio AS precioCandidata,
+       fuente_publicacion.nombre AS fuentePublicacion,
+       fuente_candidata.nombre AS fuenteCandidata
      FROM coincidencias_publicaciones cp
-     JOIN publicaciones relacionada
-       ON relacionada.id = CASE
-         WHEN cp.publicacion_id IN (${placeholders}) THEN cp.candidata_id
-         ELSE cp.publicacion_id
-       END
-     LEFT JOIN fuentes_inmobiliarias fuente ON fuente.id = relacionada.fuente_id
+     JOIN publicaciones publicacion ON publicacion.id = cp.publicacion_id
+     JOIN publicaciones candidata ON candidata.id = cp.candidata_id
+     LEFT JOIN fuentes_inmobiliarias fuente_publicacion ON fuente_publicacion.id = publicacion.fuente_id
+     LEFT JOIN fuentes_inmobiliarias fuente_candidata ON fuente_candidata.id = candidata.fuente_id
      WHERE cp.estado <> 'descartada'
        AND (cp.publicacion_id IN (${placeholders}) OR cp.candidata_id IN (${placeholders}))
      ORDER BY cp.estado = 'confirmada' DESC, cp.puntaje DESC`,
-    [...ids, ...ids, ...ids],
+    [...ids, ...ids],
   )
 
   const visibleIds = new Set(ids)
@@ -369,12 +392,7 @@ export async function getCoincidenciasPublicaciones(publicacionIds: number[]) {
       const relatedId = currentId === Number(row.publicacionId)
         ? Number(row.candidataId)
         : Number(row.publicacionId)
-      const related = relatedId === Number(row.relacionadaId)
-        ? row
-        : null
-
-      // La consulta calcula la relacionada desde un lado visible. Si ambos lados
-      // estan visibles, se completa el precio/fuente desde la lista en el cliente.
+      const currentIsPublication = currentId === Number(row.publicacionId)
       grouped[currentId] ??= []
       grouped[currentId].push({
         id: Number(row.id),
@@ -383,8 +401,8 @@ export async function getCoincidenciasPublicaciones(publicacionIds: number[]) {
         estado: row.estado,
         imagenesCoincidentes: Number(row.imagenesCoincidentes ?? 0),
         distanciaMetros: row.distanciaMetros == null ? null : Number(row.distanciaMetros),
-        fuenteRelacionada: related?.fuenteRelacionada ?? null,
-        precioRelacionado: String(related?.precioRelacionado ?? ""),
+        fuenteRelacionada: currentIsPublication ? row.fuenteCandidata : row.fuentePublicacion,
+        precioRelacionado: String(currentIsPublication ? row.precioCandidata : row.precioPublicacion),
       })
     }
   }
