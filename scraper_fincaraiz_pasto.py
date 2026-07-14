@@ -50,6 +50,10 @@ REQUEST_PAUSE_SECONDS = float(os.getenv("REQUEST_PAUSE_SECONDS", "0.5"))
 IMAGE_DOWNLOAD_WORKERS = int(os.getenv("IMAGE_DOWNLOAD_WORKERS", "6"))
 IMAGE_DOWNLOAD_TIMEOUT = int(os.getenv("IMAGE_DOWNLOAD_TIMEOUT", "12"))
 
+# Área mínima (ancho*alto) para considerar que una imagen es una foto real
+# de la publicación y no un ícono/logo/thumbnail de UI.
+MIN_PHOTO_AREA = int(os.getenv("MIN_PHOTO_AREA", str(150 * 150)))
+
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -985,6 +989,22 @@ def save_screenshot(page, codigo_archivo, publicacion_id):
         return None
 
 
+# ==========================================================
+# COLECCIÓN DE IMÁGENES (FIX: solo fotos reales de la publicación)
+# ==========================================================
+#
+# Confirmado con HTML real del sitio: las fotos de la publicación viven
+# dentro del contenedor .property-modal-photos, en elementos .pmp-image > img.
+# Ejemplo real:
+# <div class="property-modal-photos ..."><div class="pmp-image">
+#   <img src="https://cdn4.fincaraiz.com.co/repo/img/th.outside500x500...jpeg"
+#        width="500" height="500"></div></div>
+#
+# El bug anterior usaba selectores genéricos ([class*='modal'],
+# [class*='gallery'], [class*='carousel']) que también capturan otros
+# modales/carruseles de la página (contacto, cookies, recomendados, etc.),
+# colando íconos y logos junto a las fotos reales.
+
 IMAGE_URL_COLLECTOR_JS = r"""
 containers => {
     const urls = [];
@@ -1025,9 +1045,21 @@ containers => {
         addCandidate(candidates, element.getAttribute('src'));
         addCandidate(candidates, element.currentSrc);
 
+        // Señal extra: dimensiones declaradas en los atributos width/height
+        // del propio <img>, que en Fincaraíz son fiables para las fotos
+        // reales de la publicación (ej. width="500" height="500").
+        // Nota: si el atributo no existe o no es numérico, parseInt puede
+        // devolver NaN. Se normaliza a 0 aquí mismo para que nunca viaje
+        // un NaN hacia Python (Playwright sí puede serializarlo, y un NaN
+        // ahí rompe cualquier int(width) más adelante).
+        const parsedWidth = parseInt(element.getAttribute('width') || '0', 10);
+        const parsedHeight = parseInt(element.getAttribute('height') || '0', 10);
+        const width = Number.isFinite(parsedWidth) ? parsedWidth : 0;
+        const height = Number.isFinite(parsedHeight) ? parsedHeight : 0;
+
         candidates
             .filter(url => !isBlockedImage(url))
-            .forEach(url => urls.push(url));
+            .forEach(url => urls.push({ url, width, height }));
     };
 
     containers.forEach(container => {
@@ -1046,13 +1078,24 @@ containers => {
 
             matches.forEach(match => {
                 if (match[1] && !isBlockedImage(match[1])) {
-                    urls.push(match[1]);
+                    urls.push({ url: match[1], width: 0, height: 0 });
                 }
             });
         });
     });
 
-    return Array.from(new Set(urls));
+    // Deduplicar preservando la primera aparición.
+    const seen = new Set();
+    const result = [];
+
+    urls.forEach(item => {
+        if (!seen.has(item.url)) {
+            seen.add(item.url);
+            result.push(item);
+        }
+    });
+
+    return result;
 }
 """
 
@@ -1066,7 +1109,33 @@ def image_identity(image_url):
     return image_url.lower()
 
 
-def image_resolution_score(image_url):
+def _safe_dimension(value):
+    """
+    Convierte a int de forma segura. Devuelve 0 si el valor es None, NaN,
+    o cualquier cosa no convertible (protección extra por si algún dato
+    llega en un formato inesperado desde el navegador).
+    """
+    if value is None:
+        return 0
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+
+    if math.isnan(number) or math.isinf(number):
+        return 0
+
+    return int(number)
+
+
+def image_resolution_score(image_url, width=0, height=0):
+    width = _safe_dimension(width)
+    height = _safe_dimension(height)
+
+    if width and height:
+        return width * height
+
     match = re.search(r"(\d+)x(\d+)", image_url)
 
     if not match:
@@ -1075,20 +1144,34 @@ def image_resolution_score(image_url):
     return int(match.group(1)) * int(match.group(2))
 
 
-def normalize_image_urls(image_urls):
+def normalize_image_urls(image_items):
+    """
+    image_items: lista de dicts {"url": str, "width": int, "height": int}
+    (o strings simples, por compatibilidad hacia atrás).
+    """
     cleaned = []
     positions_by_identity = {}
 
-    for image_url in image_urls or []:
-        if not str(image_url).strip():
+    for item in image_items or []:
+        if isinstance(item, dict):
+            raw_url = item.get("url")
+            width = item.get("width") or 0
+            height = item.get("height") or 0
+        else:
+            raw_url = item
+            width = 0
+            height = 0
+
+        if not raw_url or not str(raw_url).strip():
             continue
 
-        image_url = urljoin(BASE_URL, str(image_url).strip())
+        image_url = urljoin(BASE_URL, str(raw_url).strip())
         lower = image_url.lower()
 
         if lower.startswith("data:"):
             continue
 
+        # Las fotos reales de la publicación siempre vienen de este path del CDN.
         if "/repo/img/" not in lower:
             continue
 
@@ -1107,13 +1190,20 @@ def normalize_image_urls(image_urls):
         ]):
             continue
 
+        # Filtro por tamaño: descarta íconos/miniaturas de UI que se hayan
+        # colado aunque vengan del mismo CDN (ej. thumbnails muy pequeños).
+        resolution_score = image_resolution_score(image_url, width, height)
+
+        if resolution_score and resolution_score < MIN_PHOTO_AREA:
+            continue
+
         identity = image_identity(image_url)
 
         if identity in positions_by_identity:
             position = positions_by_identity[identity]
             current_url = cleaned[position]
 
-            if image_resolution_score(image_url) > image_resolution_score(current_url):
+            if image_resolution_score(image_url, width, height) > image_resolution_score(current_url):
                 cleaned[position] = image_url
 
             continue
@@ -1149,22 +1239,19 @@ def open_gallery(page):
 
 
 def collect_gallery_image_urls(page):
-    gallery_selectors = (
-        ".ant-modal-root, "
-        ".ant-modal, "
-        ".ant-modal-body, "
-        "[role='dialog'], "
-        "[class*='modal'], "
-        "[class*='gallery'], "
-        "[class*='carousel'], "
-        "[class*='swiper']"
-    )
+    """
+    FIX: apunta específicamente a .property-modal-photos (confirmado con
+    HTML real del sitio), en vez de selectores genéricos de "cualquier
+    modal/carrusel/galería" que también capturan otros componentes de la
+    página (contacto, cookies, recomendados, etc.).
+    """
+    gallery_selector = ".property-modal-photos"
 
-    image_urls = []
+    image_items = []
 
     for _ in range(4):
         try:
-            image_urls.extend(page.eval_on_selector_all(gallery_selectors, IMAGE_URL_COLLECTOR_JS))
+            image_items.extend(page.eval_on_selector_all(gallery_selector, IMAGE_URL_COLLECTOR_JS))
         except Exception:
             pass
 
@@ -1172,15 +1259,10 @@ def collect_gallery_image_urls(page):
             page.evaluate(
                 """
                 () => {
-                    const containers = Array.from(document.querySelectorAll(
-                        '.ant-modal-body, [role="dialog"], [class*="modal"], [class*="gallery"], [class*="carousel"], [class*="swiper"]'
-                    ));
-
-                    containers.forEach(container => {
-                        try {
-                            container.scrollTop = container.scrollHeight;
-                        } catch (error) {}
-                    });
+                    const container = document.querySelector('.property-modal-photos');
+                    if (container) {
+                        container.scrollTop = container.scrollHeight;
+                    }
                 }
                 """
             )
@@ -1194,7 +1276,7 @@ def collect_gallery_image_urls(page):
     except Exception:
         pass
 
-    return image_urls
+    return image_items
 
 
 def collect_image_urls(page):
@@ -1204,6 +1286,7 @@ def collect_image_urls(page):
     except Exception:
         pass
 
+    # Selectores de portada (antes de abrir la galería completa).
     selectors = (
         ".property-cover-gallery, "
         ".property_details_cover, "
@@ -1213,14 +1296,14 @@ def collect_image_urls(page):
     )
 
     try:
-        image_urls = page.eval_on_selector_all(selectors, IMAGE_URL_COLLECTOR_JS)
+        image_items = page.eval_on_selector_all(selectors, IMAGE_URL_COLLECTOR_JS)
     except Exception:
-        image_urls = []
+        image_items = []
 
     if open_gallery(page):
-        image_urls.extend(collect_gallery_image_urls(page))
+        image_items.extend(collect_gallery_image_urls(page))
 
-    image_urls = normalize_image_urls(image_urls)
+    image_urls = normalize_image_urls(image_items)
 
     print(f"[INFO] Fotos detectadas para descargar: {len(image_urls)}")
 
@@ -1342,6 +1425,39 @@ def get_current_page_links(page):
         return []
 
 
+def get_max_page_from_pagination(page, search_url):
+    """
+    FIX: en vez de inferir el número de páginas solo por matemática
+    (total_resultados / resultados_por_pagina), se lee directamente del DOM
+    el número máximo de página real, a partir de los propios links de
+    paginación del sitio (ej. .../pagina2, .../pagina3 ... .../pagina8).
+    Esto evita quedarse corto si el tamaño de página no es constante.
+    """
+    base = search_url.rstrip("/")
+
+    try:
+        hrefs = page.eval_on_selector_all(
+            "a[href]",
+            "anchors => anchors.map(a => a.href).filter(Boolean)"
+        )
+    except Exception:
+        return None
+
+    max_page = None
+    pattern = re.compile(re.escape(base) + r"/pagina(\d+)$", re.IGNORECASE)
+
+    for href in hrefs:
+        match = pattern.search(href.split("?")[0].split("#")[0])
+
+        if match:
+            page_number = int(match.group(1))
+
+            if max_page is None or page_number > max_page:
+                max_page = page_number
+
+    return max_page
+
+
 def collect_publication_links(page):
     audit = ScraperAudit("FincaRaiz", SEARCH_URL)
     all_links = set()
@@ -1374,6 +1490,9 @@ def collect_publication_links(page):
 
     first_page_links = get_current_page_links(page)
 
+    # FUENTE PRIMARIA: número de página real leído del DOM (paginación).
+    pagination_max_page = get_max_page_from_pagination(page, SEARCH_URL)
+
     if result_window:
         start, end, window_total = result_window
         total_results = total_results or window_total
@@ -1382,7 +1501,20 @@ def collect_publication_links(page):
         page_size = len(first_page_links) or None
 
     if total_results and page_size:
-        detected_pages = math.ceil(total_results / page_size)
+        estimated_pages = math.ceil(total_results / page_size)
+    else:
+        estimated_pages = None
+
+    if pagination_max_page:
+        detected_pages = pagination_max_page
+        if estimated_pages and estimated_pages != pagination_max_page:
+            print(
+                f"[WARN] La paginación del sitio indica {pagination_max_page} "
+                f"pagina(s), pero el cálculo por resultados estimaba "
+                f"{estimated_pages}. Se usa el valor real de la paginación."
+            )
+    elif estimated_pages:
+        detected_pages = estimated_pages
     else:
         detected_pages = MAX_PAGES if MAX_PAGES > 0 else 1
 
@@ -1408,6 +1540,7 @@ def collect_publication_links(page):
 
     print(f"[INFO] Total resultados detectados: {total_results}")
     print(f"[INFO] Resultados por pagina detectados: {page_size}")
+    print(f"[INFO] Paginas segun paginación del sitio: {pagination_max_page}")
     print(f"[INFO] Limite MAX_PAGES: {MAX_PAGES if MAX_PAGES > 0 else 'sin limite'}")
     print(f"[INFO] Total páginas a revisar: {total_pages}")
 
