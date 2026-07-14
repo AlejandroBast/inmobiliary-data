@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from duplicate_detector import detect_duplicates_safely
 from scraper_audit import ScraperAudit
 
 
@@ -1706,6 +1707,8 @@ def main():
                         ruta_archivo=image_path,
                         url_original=image_url
                     )
+
+                detect_duplicates_safely(connection, publicacion_id)
 
                 print(f"[OK] Guardada publicación nueva ID {publicacion_id}")
                 print(f"[OK] Código externo: {data['codigo_externo']}")
