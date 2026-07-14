@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS imagenes_hashes (
     publicacion_id BIGINT NOT NULL,
     algoritmo VARCHAR(20) NOT NULL DEFAULT 'dhash64',
     hash_perceptual CHAR(16) NOT NULL,
+    hash_contenido CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL,
     ancho INT,
     alto INT,
     fecha_calculo TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
