@@ -86,6 +86,30 @@ export type CoincidenciaPublicacion = {
   precioRelacionado: string
 }
 
+export type ComparacionPublicacion = {
+  id: number
+  fuenteNombre: string | null
+  linkOrigen: string
+  codigoExterno: string | null
+  tipoInmueble: string | null
+  ciudad: string | null
+  barrio: string | null
+  direccion: string | null
+  ph: string | null
+  precio: string
+  m2: string | null
+  m2Construido: string | null
+  habitaciones: number | null
+  banios: number | null
+  parqueadero: number | null
+  estrato: number | null
+  administracion: string | null
+  descripcion: string | null
+  puntaje: number | null
+  estado: "pendiente" | "confirmada" | null
+  imagenesCoincidentes: number
+}
+
 interface CoincidenciaRow extends RowDataPacket {
   id: number
   publicacionId: number
@@ -411,6 +435,73 @@ export async function getCoincidenciasPublicaciones(publicacionIds: number[]) {
   }
 
   return grouped
+}
+
+export async function getComparacionPublicaciones(publicacionId: number): Promise<ComparacionPublicacion[]> {
+  if (!Number.isInteger(publicacionId) || publicacionId <= 0) return []
+
+  const [matches] = await pool.query<RowDataPacket[]>(
+    `SELECT id, publicacion_id, candidata_id, puntaje, estado, imagenes_coincidentes
+     FROM coincidencias_publicaciones
+     WHERE estado <> 'descartada'
+       AND (publicacion_id = ? OR candidata_id = ?)
+     ORDER BY estado = 'confirmada' DESC, puntaje DESC`,
+    [publicacionId, publicacionId],
+  )
+  const ids = [...new Set([
+    publicacionId,
+    ...matches.flatMap((match) => [Number(match.publicacion_id), Number(match.candidata_id)]),
+  ])]
+  const placeholders = ids.map(() => "?").join(", ")
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT
+       p.id, p.link_origen, p.codigo_externo, p.tipo_inmueble, p.ciudad,
+       p.barrio, p.direccion, p.ph, p.precio, p.m2, p.m2_construido,
+       p.habitaciones, p.banios, p.parqueadero, p.estrato,
+       p.administracion, p.descripcion, f.nombre AS fuente_nombre
+     FROM publicaciones p
+     LEFT JOIN fuentes_inmobiliarias f ON f.id = p.fuente_id
+     WHERE p.id IN (${placeholders})`,
+    ids,
+  )
+
+  const matchById = new Map<number, RowDataPacket>()
+  for (const match of matches) {
+    const relatedId = Number(match.publicacion_id) === publicacionId
+      ? Number(match.candidata_id)
+      : Number(match.publicacion_id)
+    matchById.set(relatedId, match)
+  }
+
+  return rows
+    .map((row) => {
+      const id = Number(row.id)
+      const match = matchById.get(id)
+      return {
+        id,
+        fuenteNombre: row.fuente_nombre == null ? null : String(row.fuente_nombre),
+        linkOrigen: String(row.link_origen),
+        codigoExterno: row.codigo_externo == null ? null : String(row.codigo_externo),
+        tipoInmueble: row.tipo_inmueble == null ? null : String(row.tipo_inmueble),
+        ciudad: row.ciudad == null ? null : String(row.ciudad),
+        barrio: row.barrio == null ? null : String(row.barrio),
+        direccion: row.direccion == null ? null : String(row.direccion),
+        ph: row.ph == null ? null : String(row.ph),
+        precio: String(row.precio),
+        m2: row.m2 == null ? null : String(row.m2),
+        m2Construido: row.m2_construido == null ? null : String(row.m2_construido),
+        habitaciones: row.habitaciones == null ? null : Number(row.habitaciones),
+        banios: row.banios == null ? null : Number(row.banios),
+        parqueadero: row.parqueadero == null ? null : Number(row.parqueadero),
+        estrato: row.estrato == null ? null : Number(row.estrato),
+        administracion: row.administracion == null ? null : String(row.administracion),
+        descripcion: row.descripcion == null ? null : String(row.descripcion),
+        puntaje: match == null ? null : Number(match.puntaje),
+        estado: match == null ? null : match.estado as "pendiente" | "confirmada",
+        imagenesCoincidentes: match == null ? 0 : Number(match.imagenes_coincidentes ?? 0),
+      }
+    })
+    .sort((first, second) => first.id === publicacionId ? -1 : second.id === publicacionId ? 1 : (second.puntaje ?? 0) - (first.puntaje ?? 0))
 }
 
 function normalizeStoredLinks(input: PublicacionLinkValidationInput) {
