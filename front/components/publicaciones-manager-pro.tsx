@@ -40,6 +40,8 @@ import {
   Building2,
   CalendarClock,
   Car,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   ExternalLink,
   Eye,
@@ -130,11 +132,22 @@ export function PublicacionesManagerPro({
   const [notaSaving, setNotaSaving] = useState(false)
   const [toDelete, setToDelete] = useState<Row | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const router = useRouter()
+
+  const totalPages = Math.max(1, Math.ceil(publicaciones.length / pageSize))
+  const safePage = Math.min(currentPage, totalPages)
+  const pageStart = (safePage - 1) * pageSize
+  const visiblePublicaciones = publicaciones.slice(pageStart, pageStart + pageSize)
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [publicaciones])
 
   useEffect(() => {
     let active = true
-    const items = publicaciones.map(rowLinks)
+    const items = visiblePublicaciones.map(rowLinks)
 
     if (items.length === 0) {
       setLinkStatuses({})
@@ -160,7 +173,7 @@ export function PublicacionesManagerPro({
     return () => {
       active = false
     }
-  }, [publicaciones])
+  }, [publicaciones, safePage, pageSize])
 
   useEffect(() => {
     if (!detail) {
@@ -259,7 +272,7 @@ export function PublicacionesManagerPro({
     <div className="space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="rounded-lg border border-slate-200/70 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/5">
-          <p className="text-sm font-semibold">{publicaciones.length} publicaciones visibles</p>
+          <p className="text-sm font-semibold">{publicaciones.length} publicaciones encontradas</p>
           <p className="text-xs text-muted-foreground">
             {hasActiveFilters ? "Resultados filtrados desde el servidor." : "Inventario completo listo para analizar."}
           </p>
@@ -300,7 +313,7 @@ export function PublicacionesManagerPro({
               <p className="text-sm text-muted-foreground">Tabla compacta para comparar precio, ubicacion, fuente y caracteristicas.</p>
             </div>
             <Badge variant="outline" className="border-emerald-200 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300">
-              {publicaciones.length} registros
+              Pagina {safePage} de {totalPages} · {publicaciones.length} registros
             </Badge>
           </div>
           <div className="overflow-x-auto">
@@ -321,7 +334,7 @@ export function PublicacionesManagerPro({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {publicaciones.map((p, index) => (
+                {visiblePublicaciones.map((p, index) => (
                   <TableRow
                     key={p.id}
                     className={[
@@ -410,6 +423,50 @@ export function PublicacionesManagerPro({
               </TableBody>
             </Table>
           </div>
+          <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span>Mostrar</span>
+              <select
+                value={pageSize}
+                onChange={(event) => {
+                  setPageSize(Number(event.target.value))
+                  setCurrentPage(1)
+                }}
+                className="h-9 rounded-md border border-input bg-background px-2 text-foreground"
+                aria-label="Publicaciones por pagina"
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+              </select>
+              <span>por pagina · {pageStart + 1}-{Math.min(pageStart + pageSize, publicaciones.length)} de {publicaciones.length}</span>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={safePage <= 1}
+                onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                className="gap-1"
+              >
+                <ChevronLeft className="size-4" />
+                Anterior
+              </Button>
+              <Badge variant="outline">{safePage} / {totalPages}</Badge>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={safePage >= totalPages}
+                onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                className="gap-1"
+              >
+                Siguiente
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
         </Card>
       )}
 
@@ -449,8 +506,13 @@ export function PublicacionesManagerPro({
                     {detail.coincidencias.map((coincidencia) => (
                       <div key={coincidencia.id} className="flex flex-col gap-2 rounded-md border border-amber-200 bg-white/70 p-3 dark:border-amber-400/20 dark:bg-black/10 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm">
-                          <span className="font-semibold">Publicacion #{coincidencia.publicacionRelacionadaId}</span>
-                          <span className="ml-2">{coincidencia.puntaje}% de coincidencia</span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold">Publicacion #{coincidencia.publicacionRelacionadaId}</span>
+                            <Badge variant="secondary" className="border border-amber-300/70 bg-amber-100 text-amber-950 dark:border-amber-300/20 dark:bg-amber-300/15 dark:text-amber-100">
+                              {coincidencia.fuenteRelacionada || "Fuente desconocida"}
+                            </Badge>
+                            <span>{coincidencia.puntaje}% de coincidencia</span>
+                          </div>
                           <div className="text-xs opacity-75">
                             {coincidencia.estado === "confirmada" ? "Coincidencia confirmada" : "Pendiente de revision"}
                             {coincidencia.imagenesCoincidentes > 0 ? ` · ${coincidencia.imagenesCoincidentes} imagen(es)` : ""}
