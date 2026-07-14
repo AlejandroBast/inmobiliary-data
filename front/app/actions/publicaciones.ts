@@ -1,5 +1,7 @@
 "use server"
 
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { db, pool } from "@/lib/db"
 import { fuentesInmobiliarias, publicaciones } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
@@ -60,14 +62,15 @@ export type PublicacionLinkValidationInput = {
 export type PublicacionLinkCheck = {
   label: string
   url: string
-  ok: boolean
+  // true = disponible, false = roto, null = no se pudo verificar (p.ej. Facebook sin sesion)
+  ok: boolean | null
   status: number | null
   error?: string
 }
 
 export type PublicacionLinkStatus = {
   id: number
-  ok: boolean
+  ok: boolean | null
   checkedAt: string
   links: PublicacionLinkCheck[]
 }
@@ -435,9 +438,68 @@ function normalizeStoredLinks(input: PublicacionLinkValidationInput) {
   return links
 }
 
-async function validateLink(label: string, url: string): Promise<PublicacionLinkCheck> {
+const FACEBOOK_HOSTNAME_RE = /(^|\.)facebook\.com$/i
+const FACEBOOK_COOKIES_TTL_MS = 60_000
+
+type FacebookCookie = { name: string; value: string; domain?: string }
+
+let facebookCookieCache: { header: string | null; loadedAt: number } | null = null
+
+function facebookUnknownCheck(label: string, url: string, status: number | null, error: string): PublicacionLinkCheck {
+  return { label, url, ok: null, status, error }
+}
+
+function facebookCookiesPath() {
+  // El scraper (Python) exporta las cookies en .facebook_profile/session_cookies.json
+  // desde la raiz del repo. El front corre desde /front, por eso subimos un nivel.
+  return (
+    process.env.FACEBOOK_SESSION_COOKIES_PATH ||
+    path.join(process.cwd(), "..", ".facebook_profile", "session_cookies.json")
+  )
+}
+
+async function getFacebookCookieHeader(): Promise<string | null> {
+  if (facebookCookieCache && Date.now() - facebookCookieCache.loadedAt < FACEBOOK_COOKIES_TTL_MS) {
+    return facebookCookieCache.header
+  }
+  try {
+    const raw = await readFile(facebookCookiesPath(), "utf-8")
+    const parsed = JSON.parse(raw) as { cookies?: FacebookCookie[] }
+    const cookies = parsed.cookies ?? []
+    const header = cookies.length ? cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ") : null
+    facebookCookieCache = { header, loadedAt: Date.now() }
+    return header
+  } catch {
+    facebookCookieCache = { header: null, loadedAt: Date.now() }
+    return null
+  }
+}
+
+async function validateLink(
+  label: string,
+  url: string,
+  facebookCookieHeader: string | null,
+): Promise<PublicacionLinkCheck> {
   if (!/^https?:\/\//i.test(url)) {
     return { label, url, ok: false, status: null, error: "URL invalida" }
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(url)
+  } catch {
+    return { label, url, ok: false, status: null, error: "URL invalida" }
+  }
+
+  const isFacebook = FACEBOOK_HOSTNAME_RE.test(parsedUrl.hostname)
+
+  if (isFacebook && !facebookCookieHeader) {
+    return facebookUnknownCheck(
+      label,
+      url,
+      null,
+      "Sin sesion de Facebook exportada. Ejecuta el scraper para refrescarla.",
+    )
   }
 
   const controller = new AbortController()
@@ -452,18 +514,69 @@ async function validateLink(label: string, url: string): Promise<PublicacionLink
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        ...(isFacebook && facebookCookieHeader ? { Cookie: facebookCookieHeader } : {}),
       },
     })
+
+    const statusOk = response.status >= 200 && response.status < 400
+
+    if (isFacebook) {
+      const finalUrl = response.url.toLowerCase()
+      if (finalUrl.includes("/login") || finalUrl.includes("/checkpoint")) {
+        return facebookUnknownCheck(
+          label,
+          url,
+          response.status,
+          "La sesion de Facebook expiro. Ejecuta el scraper para refrescarla.",
+        )
+      }
+
+      if (!statusOk) {
+        return facebookUnknownCheck(
+          label,
+          url,
+          response.status,
+          `Facebook no permitio verificar este link (HTTP ${response.status}). Refresca la sesion con el scraper.`,
+        )
+      }
+
+      const body = (await response.text()).toLowerCase()
+      if (
+        body.includes("login to facebook") ||
+        body.includes("log in to facebook") ||
+        body.includes("iniciar sesion") ||
+        body.includes("inicia sesion") ||
+        body.includes("checkpoint")
+      ) {
+        return facebookUnknownCheck(
+          label,
+          url,
+          response.status,
+          "Facebook mostro login/checkpoint. Ejecuta el scraper para refrescar la sesion.",
+        )
+      }
+    }
 
     return {
       label,
       url,
-      ok: response.status >= 200 && response.status < 400,
+      ok: statusOk,
       status: response.status,
-      error: response.status >= 200 && response.status < 400 ? undefined : `HTTP ${response.status}`,
+      error: statusOk ? undefined : `HTTP ${response.status}`,
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "No se pudo validar"
+    if (isFacebook) {
+      return facebookUnknownCheck(
+        label,
+        url,
+        null,
+        message.includes("aborted")
+          ? "Tiempo de espera agotado validando Facebook; no se marca como roto."
+          : `Facebook no permitio completar la verificacion: ${message}`,
+      )
+    }
+
     return {
       label,
       url,
@@ -479,14 +592,21 @@ async function validateLink(label: string, url: string): Promise<PublicacionLink
 export async function validatePublicacionLinks(
   items: PublicacionLinkValidationInput[],
 ): Promise<PublicacionLinkStatus[]> {
+  const facebookCookieHeader = await getFacebookCookieHeader()
+
   return Promise.all(
     items.map(async (item) => {
       const links = normalizeStoredLinks(item)
-      const checks = await Promise.all(links.map((link) => validateLink(link.label, link.url)))
+      const checks = await Promise.all(
+        links.map((link) => validateLink(link.label, link.url, facebookCookieHeader)),
+      )
+
+      const hasBroken = checks.some((check) => check.ok === false)
+      const hasUnknown = checks.some((check) => check.ok === null)
 
       return {
         id: item.id,
-        ok: checks.length > 0 && checks.every((check) => check.ok),
+        ok: checks.length === 0 || hasBroken ? false : hasUnknown ? null : true,
         checkedAt: new Date().toISOString(),
         links: checks,
       }
