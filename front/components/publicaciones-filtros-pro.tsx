@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select"
 import { formatCOP } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
-import { CalendarDays, Eraser, Filter, Home, MapPinned, Ruler, Search, Tags, type LucideIcon } from "lucide-react"
+import { AlertTriangle, CalendarDays, Eraser, Filter, Home, MapPinned, Ruler, Search, Tags, type LucideIcon } from "lucide-react"
 
 type FiltrosValue = {
   id: string
@@ -32,6 +32,7 @@ type FiltrosValue = {
   m2Min: string
   m2Max: string
   phTipo: string
+  duplicados: string
 }
 
 type PricePreset = {
@@ -54,6 +55,7 @@ const initialFilters: FiltrosValue = {
   m2Min: "",
   m2Max: "",
   phTipo: "",
+  duplicados: "",
 }
 
 const pricePresets: PricePreset[] = [
@@ -269,6 +271,26 @@ export function PublicacionesFiltrosPro({
                 <SelectItem value="normal">Normales</SelectItem>
               </SelectContent>
             </Select>
+          </Field>
+          <Field label="Coincidencias" htmlFor="filtro-duplicados">
+            <Select value={values.duplicados} onValueChange={(value) => setField("duplicados", value ?? "")}>
+              <SelectTrigger id="filtro-duplicados">
+                <SelectValue placeholder="Todas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas las publicaciones</SelectItem>
+                <SelectItem value="con">Con posibles repetidas</SelectItem>
+                <SelectItem value="confirmadas">Repetidas confirmadas</SelectItem>
+                <SelectItem value="pendientes">Pendientes de revision</SelectItem>
+                <SelectItem value="sin">Sin coincidencias</SelectItem>
+              </SelectContent>
+            </Select>
+            {values.duplicados && values.duplicados !== "all" && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
+                <AlertTriangle className="size-3" />
+                Filtro del comparador activo
+              </p>
+            )}
           </Field>
         </FilterGroup>
 
