@@ -272,17 +272,14 @@ export function PublicacionesFiltrosPro({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Coincidencias" htmlFor="filtro-duplicados">
+          <Field label="Publicaciones repetidas" htmlFor="filtro-duplicados">
             <Select value={values.duplicados} onValueChange={(value) => setField("duplicados", value ?? "")}>
               <SelectTrigger id="filtro-duplicados">
-                <SelectValue placeholder="Todas" />
+                <SelectValue placeholder="Seleccionar" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Todas las publicaciones</SelectItem>
-                <SelectItem value="con">Con posibles repetidas</SelectItem>
-                <SelectItem value="confirmadas">Repetidas confirmadas</SelectItem>
-                <SelectItem value="pendientes">Pendientes de revision</SelectItem>
-                <SelectItem value="sin">Sin coincidencias</SelectItem>
+                <SelectItem value="con">Repetidas</SelectItem>
+                <SelectItem value="sin">No repetidas</SelectItem>
               </SelectContent>
             </Select>
             {values.duplicados && values.duplicados !== "all" && (
