@@ -51,6 +51,14 @@ Variables utiles:
 
 El filtro guarda solo publicaciones de venta con precio y tipo de inmueble reconocido. Rechaza arriendo, alquiler, renta, anticresis, permuta, busco/compro y anuncios explicitamente fuera de Pasto. La auditoria queda en `logs/`.
 
+### Validacion de links de Facebook en el front
+
+El front verifica si el `link_origen` de cada publicacion sigue activo. Para links de Facebook, un simple `fetch` sin sesion siempre choca con el muro de login, asi que el scraper exporta las cookies de la sesion activa a `.facebook_profile/session_cookies.json` (se sobreescriben en cada corrida, apenas se confirma que la sesion sigue logueada). El front las lee desde ahi para validar esos links con la misma sesion.
+
+- Si nunca corriste el scraper con sesion valida, o el archivo no existe, esos links se muestran como "No verificable (sesion Facebook)" en vez de marcarse en rojo.
+- Si la sesion expiro, corre el scraper una vez (aunque sea con `FACEBOOK_DRY_RUN=true`) para refrescarla.
+- Ruta configurable con `FACEBOOK_SESSION_COOKIES_PATH` (debe apuntar al mismo archivo desde ambos lados, Python y `front/.env.local`).
+
 Si aparece `Access denied for user 'root'@'localhost'`, MySQL rechazo la clave usada por el scraper. Define la misma clave que usas para entrar a tu MySQL:
 
 ```powershell
