@@ -1,6 +1,6 @@
 # Instalar dependencias
-pip install playwright mysql-connector-python python-dotenv requests beautifulsoup4
-python -m playwright install chromium
+py -3 -m pip install -r requirements.txt
+py -3 -m playwright install chromium
 
 ## Configuración compartida
 
@@ -41,15 +41,20 @@ python scraper_facebook_marketplace.py
 Variables utiles:
 
 - `FACEBOOK_MARKETPLACE_URLS`: una o varias URLs completas de busqueda separadas por `;` o `|`.
-- `FACEBOOK_SEARCH_CITY=pasto`: ciudad usada si no pasas URLs completas.
-- `FACEBOOK_SEARCH_PHRASES`: frases separadas por `;` o `|`; por defecto busca ventas de casa, apartamento, lote, oficina, local y finca en Pasto.
+- Si no defines `FACEBOOK_MARKETPLACE_URLS`, el scraper usa por defecto el listado filtrado de Facebook Marketplace para `Viviendas en venta` en Pasto.
+- `FACEBOOK_SEARCH_PHRASES`: modo opcional para volver a busquedas por frases separadas por `;` o `|`.
+- `FACEBOOK_SEARCH_CITY=pasto`: ciudad usada solo en el modo opcional de busquedas por frases.
 - `FACEBOOK_HEADLESS=false`: recomendado para resolver login/captcha manualmente.
 - `FACEBOOK_LOGIN_WAIT_SECONDS=90`: espera para completar login manual.
-- `FACEBOOK_MAX_SCROLLS=30`: scrolls por busqueda.
-- `FACEBOOK_STALL_SCROLLS=4`: detiene una busqueda tras varios scrolls sin links nuevos.
+- `FACEBOOK_MAX_SCROLLS=80`: scrolls maximos por listado.
+- `FACEBOOK_STALL_SCROLLS=4`: detiene un listado tras varios scrolls sin links nuevos.
+- `FACEBOOK_TRUST_SALE_FILTERS=true`: confia en que el listado filtrado ya es de venta; igual rechaza arriendo/alquiler y exige precio real.
+- `FACEBOOK_SPLIT_PRICE_BUCKETS=true`: recorre el mismo listado por rangos de precio para superar el techo practico de resultados que Facebook entrega en un solo scroll.
+- `FACEBOOK_INCLUDE_UNFILTERED_LISTING=true`: primero revisa el listado general y luego los rangos de precio.
+- `FACEBOOK_PRICE_BUCKETS`: rangos personalizados separados por `;`, por ejemplo `0-80000000;80000000-120000000;120000000-160000000;3000000000+`.
 - `FACEBOOK_MIN_SALE_PRICE=10000000`: evita guardar numeros pequenos que no son precio real.
 
-El filtro guarda solo publicaciones de venta con precio y tipo de inmueble reconocido. Rechaza arriendo, alquiler, renta, anticresis, permuta, busco/compro y anuncios explicitamente fuera de Pasto. La auditoria queda en `logs/`.
+El filtro guarda publicaciones con precio y tipo de inmueble reconocido. Rechaza arriendo, alquiler, renta, anticresis, permuta, busco/compro y anuncios explicitamente fuera de Pasto. Las imagenes se extraen desde el bloque de la publicacion y se descartan fotos de perfiles o publicaciones relacionadas. La auditoria queda en `logs/`. Si un solo listado se queda alrededor de 500 resultados, manten activa la division por precio; Facebook suele limitar cada scroll infinito, no necesariamente el total real disponible.
 
 ### Validacion de links de Facebook en el front
 
