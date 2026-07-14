@@ -25,8 +25,10 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   deletePublicacion,
+  getComparacionPublicaciones,
   updateNotaPublicacion,
   validatePublicacionLinks,
+  type ComparacionPublicacion,
   type CoincidenciaPublicacion,
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
@@ -43,6 +45,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  Columns3,
   ExternalLink,
   Eye,
   HelpCircle,
@@ -132,6 +135,11 @@ export function PublicacionesManagerPro({
   const [notaDraft, setNotaDraft] = useState("")
   const [notaSaving, setNotaSaving] = useState(false)
   const [toDelete, setToDelete] = useState<Row | null>(null)
+  const [comparisonRootId, setComparisonRootId] = useState<number | null>(null)
+  const [comparisonRows, setComparisonRows] = useState<ComparacionPublicacion[]>([])
+  const [comparisonImages, setComparisonImages] = useState<Record<number, ImageItem[]>>({})
+  const [comparisonImageIndexes, setComparisonImageIndexes] = useState<Record<number, number>>({})
+  const [comparisonLoading, setComparisonLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -231,6 +239,37 @@ export function PublicacionesManagerPro({
   function openEdit(row: Row) {
     setEditing(row)
     setFormOpen(true)
+  }
+
+  async function openComparison(row: Row) {
+    setDetail(null)
+    setComparisonRootId(row.id)
+    setComparisonRows([])
+    setComparisonImages({})
+    setComparisonImageIndexes({})
+    setComparisonLoading(true)
+
+    try {
+      const rows = await getComparacionPublicaciones(row.id)
+      setComparisonRows(rows)
+      const imageEntries = await Promise.all(rows.map(async (item) => {
+        try {
+          const response = await fetch(`/api/publicaciones/${item.id}/imagenes`)
+          const data = response.ok ? (await response.json()) as { images?: ImageItem[] } : { images: [] }
+          return [item.id, Array.isArray(data.images) ? data.images : []] as const
+        } catch {
+          return [item.id, []] as const
+        }
+      }))
+      setComparisonImages(Object.fromEntries(imageEntries))
+    } catch (error) {
+      toast.error("No se pudo abrir la comparacion", {
+        description: error instanceof Error ? error.message : "Error desconocido",
+      })
+      setComparisonRootId(null)
+    } finally {
+      setComparisonLoading(false)
+    }
   }
 
   function confirmDelete() {
@@ -403,6 +442,12 @@ export function PublicacionesManagerPro({
                           <Eye className="size-4" />
                           Ver publicacion
                         </Button>
+                        {!!p.coincidencias?.length && (
+                          <Button variant="outline" size="sm" onClick={() => void openComparison(p)} className="gap-1 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-400/30 dark:text-amber-300 dark:hover:bg-amber-400/10">
+                            <Columns3 className="size-4" />
+                            Comparar
+                          </Button>
+                        )}
                         <Button variant="ghost" size="icon-sm" onClick={() => setDetail(p)} aria-label="Nota">
                           <MessageSquareText className="size-4" />
                         </Button>
@@ -503,6 +548,10 @@ export function PublicacionesManagerPro({
                       <p className="font-semibold">Esta publicacion puede estar repetida</p>
                       <p className="text-xs opacity-80">El comparador encontro imagenes, ubicacion o caracteristicas coincidentes.</p>
                     </div>
+                    <Button type="button" variant="outline" size="sm" className="ml-auto shrink-0 gap-2 border-amber-300 bg-white/70 text-amber-800 hover:bg-white dark:border-amber-400/30 dark:bg-black/10 dark:text-amber-200" onClick={() => void openComparison(detail)}>
+                      <Columns3 className="size-4" />
+                      Comparar todas
+                    </Button>
                   </div>
                   <div className="space-y-2">
                     {detail.coincidencias.map((coincidencia) => (
@@ -698,6 +747,118 @@ export function PublicacionesManagerPro({
         </DialogContent>
       </Dialog>
 
+      <Dialog open={comparisonRootId !== null} onOpenChange={(open) => !open && setComparisonRootId(null)}>
+        <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Columns3 className="size-5 text-emerald-600" />
+              Comparar publicaciones repetidas
+            </DialogTitle>
+            <DialogDescription>
+              Revisa imágenes y datos generales lado a lado antes de tomar una decisión.
+            </DialogDescription>
+          </DialogHeader>
+
+          {comparisonLoading ? (
+            <div className="flex min-h-72 items-center justify-center gap-3 text-muted-foreground">
+              <Loader2 className="size-5 animate-spin" />
+              Cargando publicaciones e imágenes...
+            </div>
+          ) : comparisonRows.length > 1 ? (
+            <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {comparisonRows.map((item) => {
+                const images = comparisonImages[item.id] ?? []
+                const imageIndex = Math.min(comparisonImageIndexes[item.id] ?? 0, Math.max(0, images.length - 1))
+                const image = images[imageIndex]
+                const isRoot = item.id === comparisonRootId
+                return (
+                  <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm ${isRoot ? "border-emerald-400 ring-2 ring-emerald-400/15" : "border-slate-200 dark:border-white/10"}`}>
+                    <div className="relative aspect-[16/10] overflow-hidden bg-slate-100 dark:bg-white/5">
+                      {image ? (
+                        <img src={image.src} alt={`Publicacion ${item.id}`} className="size-full object-cover" />
+                      ) : (
+                        <div className="flex size-full flex-col items-center justify-center gap-2 text-muted-foreground">
+                          <ImageIcon className="size-8" />
+                          <span className="text-xs">Sin imagen disponible</span>
+                        </div>
+                      )}
+                      <div className="absolute left-3 top-3 flex flex-wrap gap-2">
+                        <Badge className={isRoot ? "bg-emerald-600 text-white" : "bg-black/70 text-white"}>#{item.id}{isRoot ? " · seleccionada" : ""}</Badge>
+                        {item.estado && <Badge className={item.estado === "confirmada" ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}>{item.estado}</Badge>}
+                      </div>
+                      {images.length > 1 && (
+                        <>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="icon"
+                            aria-label={`Foto anterior de la publicacion ${item.id}`}
+                            className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
+                            onClick={() => setComparisonImageIndexes((current) => ({
+                              ...current,
+                              [item.id]: (imageIndex - 1 + images.length) % images.length,
+                            }))}
+                          >
+                            <ChevronLeft className="size-5" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="icon"
+                            aria-label={`Foto siguiente de la publicacion ${item.id}`}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
+                            onClick={() => setComparisonImageIndexes((current) => ({
+                              ...current,
+                              [item.id]: (imageIndex + 1) % images.length,
+                            }))}
+                          >
+                            <ChevronRight className="size-5" />
+                          </Button>
+                          <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+                            {imageIndex + 1} / {images.length}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <div className="space-y-4 p-4">
+                      <div>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <h3 className="font-semibold">{item.tipoInmueble || "Inmueble"}</h3>
+                          <Badge variant="secondary">{item.fuenteNombre || "Sin fuente"}</Badge>
+                        </div>
+                        <p className="mt-2 text-xl font-bold text-emerald-700 dark:text-emerald-300">{formatCOP(item.precio)}</p>
+                        {item.puntaje !== null && <p className="mt-1 text-xs text-muted-foreground">{item.puntaje}% de coincidencia · {item.imagenesCoincidentes} imagen(es) idéntica(s)</p>}
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <CompareValue label="Barrio" value={item.barrio || "-"} />
+                        <CompareValue label="Ciudad" value={item.ciudad || "-"} />
+                        <CompareValue label="Área" value={formatNumber(item.m2, " m2")} />
+                        <CompareValue label="Construida" value={formatNumber(item.m2Construido, " m2")} />
+                        <CompareValue label="Habitaciones" value={item.habitaciones ?? "-"} />
+                        <CompareValue label="Baños" value={item.banios ?? "-"} />
+                        <CompareValue label="Parqueaderos" value={item.parqueadero ?? "-"} />
+                        <CompareValue label="Estrato" value={item.estrato ?? "-"} />
+                        <CompareValue label="Edificio / conjunto" value={item.ph || "-"} className="col-span-2" />
+                        <CompareValue label="Dirección" value={item.direccion || "-"} className="col-span-2" />
+                      </div>
+                      {item.descripcion && <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>}
+                      <Button type="button" variant="outline" className="w-full gap-2" onClick={() => window.open(item.linkOrigen, "_blank", "noopener,noreferrer")}>
+                        <ExternalLink className="size-4" />
+                        Abrir publicación original
+                      </Button>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+              No se encontraron publicaciones relacionadas para comparar.
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!toDelete} onOpenChange={(open) => !open && setToDelete(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -726,6 +887,15 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
     <div>
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
       <p className="font-medium">{value}</p>
+    </div>
+  )
+}
+
+function CompareValue({ label, value, className = "" }: { label: string; value: React.ReactNode; className?: string }) {
+  return (
+    <div className={`rounded-lg border border-slate-200/80 bg-slate-50/70 p-2.5 dark:border-white/10 dark:bg-white/5 ${className}`}>
+      <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 break-words font-medium text-foreground">{value}</p>
     </div>
   )
 }
