@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from duplicate_detector import detect_duplicates_safely
 from scraper_audit import ScraperAudit
 
 
@@ -509,6 +510,13 @@ def extract_location(lines, title=None, text=None, html=None):
         return "Pasto", None, structured_address
 
     return "Pasto", None, "Pasto, Nariño"
+
+
+def is_pasto_publication(url, title=None, html=None):
+    """Exige una señal territorial en la identidad oficial de la ficha."""
+    head = (html or "").split("</head>", 1)[0]
+    official_identity = normalize_label(" ".join([url or "", title or "", head]))
+    return re.search(r"\bpasto\b", official_identity, re.IGNORECASE) is not None
 
 
 def extract_tipo_inmueble(title, lines, text):
@@ -1626,6 +1634,10 @@ def extract_publication_data(page, url, fuente_id):
     except Exception:
         title = None
 
+    if not is_pasto_publication(url=url, title=title, html=html):
+        print(f"[SKIP] Publicacion fuera de Pasto: {url}")
+        return None, html, "fuera_de_pasto"
+
     codigo_externo = extract_codigo(text, url=url)
     precio = extract_precio(text)
 
@@ -1743,6 +1755,7 @@ def main():
     total_nuevas = 0
     total_saltadas = 0
     total_sin_precio = 0
+    total_fuera_de_pasto = 0
     total_errores = 0
 
     with sync_playwright() as playwright:
@@ -1781,6 +1794,9 @@ def main():
                     if skip_reason == "sin_precio":
                         total_sin_precio += 1
                         audit.record_omission("sin_precio", link)
+                    elif skip_reason == "fuera_de_pasto":
+                        total_fuera_de_pasto += 1
+                        audit.record_omission("fuera_de_pasto", link)
                     else:
                         total_errores += 1
                         audit.record_omission("sin_datos_extraidos", link)
@@ -1872,6 +1888,8 @@ def main():
                         url_original=image_url
                     )
 
+                detect_duplicates_safely(connection, publicacion_id)
+
                 print(f"[OK] Guardada publicación nueva ID {publicacion_id}")
                 print(f"[OK] Código externo: {data['codigo_externo']}")
                 print(f"[OK] Tipo: {data['tipo_inmueble']}")
@@ -1900,11 +1918,13 @@ def main():
     print(f"[RESUMEN] Nuevas guardadas: {total_nuevas}")
     print(f"[RESUMEN] Saltadas porque ya existían: {total_saltadas}")
     print(f"[RESUMEN] Omitidas sin precio: {total_sin_precio}")
+    print(f"[RESUMEN] Omitidas fuera de Pasto: {total_fuera_de_pasto}")
     print(f"[RESUMEN] Errores: {total_errores}")
     audit.set_processing_counts(
         nuevas=total_nuevas,
         saltadas=total_saltadas,
         omitidas_sin_precio=total_sin_precio,
+        omitidas_fuera_de_pasto=total_fuera_de_pasto,
         errores=total_errores,
     )
     audit.print_summary(len(publication_links))
