@@ -29,6 +29,7 @@ except ImportError:
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
+from duplicate_detector import detect_duplicates_safely
 from scraper_audit import ScraperAudit
 
 
@@ -1537,6 +1538,7 @@ def main():
 
                     total_nuevas += 1
                     save_publication_evidence(context, connection, publicacion_id, data, html, image_urls)
+                    detect_duplicates_safely(connection, publicacion_id)
                     print(f"[OK] Guardada publicacion Facebook ID {publicacion_id}")
                     print(f"[OK] Codigo externo: {data['codigo_externo']}")
                     print(f"[OK] Tipo: {data['tipo_inmueble']} | Barrio: {data['barrio']} | Ciudad: {data['ciudad']}")
