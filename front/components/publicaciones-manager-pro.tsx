@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState, useTransition } from "react"
+import { useEffect, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -63,6 +63,105 @@ import { toast } from "sonner"
 type Row = Record<string, any> & { id: number; coincidencias?: CoincidenciaPublicacion[] }
 type ImageItem = { name: string; src: string }
 type HtmlItem = { name: string; src: string }
+
+function ComparisonImageCarousel({
+  publicationId,
+  images,
+  children,
+}: {
+  publicationId: number
+  images: ImageItem[]
+  children?: React.ReactNode
+}) {
+  const [imageIndex, setImageIndex] = useState(0)
+  const preloadedImages = useRef<Map<string, HTMLImageElement>>(new Map())
+  const imageCount = images.length
+  const safeImageIndex = imageCount > 0 ? imageIndex % imageCount : 0
+  const image = images[safeImageIndex]
+
+  useEffect(() => {
+    setImageIndex(0)
+    preloadedImages.current.clear()
+  }, [publicationId, images])
+
+  useEffect(() => {
+    if (imageCount <= 1) return
+
+    const neighborIndexes = [
+      (safeImageIndex - 1 + imageCount) % imageCount,
+      (safeImageIndex + 1) % imageCount,
+    ]
+
+    for (const neighborIndex of neighborIndexes) {
+      const source = images[neighborIndex]?.src
+      if (!source || preloadedImages.current.has(source)) continue
+
+      const preload = new window.Image()
+      preload.decoding = "async"
+      preload.src = source
+      preloadedImages.current.set(source, preload)
+      void preload.decode().catch(() => undefined)
+    }
+  }, [imageCount, images, safeImageIndex])
+
+  function moveImage(direction: -1 | 1) {
+    setImageIndex((currentIndex) => {
+      if (imageCount <= 1) return 0
+      const normalizedIndex = ((currentIndex % imageCount) + imageCount) % imageCount
+      return (normalizedIndex + direction + imageCount) % imageCount
+    })
+  }
+
+  return (
+    <div className="relative aspect-[16/10] overflow-hidden bg-slate-100 dark:bg-white/5">
+      {image ? (
+        <img
+          src={image.src}
+          alt={`Publicacion ${publicationId}`}
+          className="size-full select-none object-cover"
+          decoding="async"
+          loading="eager"
+          draggable={false}
+        />
+      ) : (
+        <div className="flex size-full flex-col items-center justify-center gap-2 text-muted-foreground">
+          <ImageIcon className="size-8" />
+          <span className="text-xs">Sin imagen disponible</span>
+        </div>
+      )}
+
+      {children}
+
+      {imageCount > 1 && (
+        <>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            aria-label={`Foto anterior de la publicacion ${publicationId}`}
+            className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
+            onClick={() => moveImage(-1)}
+          >
+            <ChevronLeft className="size-5" />
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            aria-label={`Foto siguiente de la publicacion ${publicationId}`}
+            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
+            onClick={() => moveImage(1)}
+          >
+            <ChevronRight className="size-5" />
+          </Button>
+          <span className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+            {safeImageIndex + 1} / {imageCount}
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
 
 function barrioLabel(value?: string | null) {
   return value?.trim() || "Sin barrio"
@@ -138,7 +237,6 @@ export function PublicacionesManagerPro({
   const [comparisonRootId, setComparisonRootId] = useState<number | null>(null)
   const [comparisonRows, setComparisonRows] = useState<ComparacionPublicacion[]>([])
   const [comparisonImages, setComparisonImages] = useState<Record<number, ImageItem[]>>({})
-  const [comparisonImageIndexes, setComparisonImageIndexes] = useState<Record<number, number>>({})
   const [comparisonLoading, setComparisonLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
@@ -246,7 +344,6 @@ export function PublicacionesManagerPro({
     setComparisonRootId(row.id)
     setComparisonRows([])
     setComparisonImages({})
-    setComparisonImageIndexes({})
     setComparisonLoading(true)
 
     try {
@@ -768,58 +865,15 @@ export function PublicacionesManagerPro({
             <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
               {comparisonRows.map((item) => {
                 const images = comparisonImages[item.id] ?? []
-                const imageIndex = Math.min(comparisonImageIndexes[item.id] ?? 0, Math.max(0, images.length - 1))
-                const image = images[imageIndex]
                 const isRoot = item.id === comparisonRootId
                 return (
                   <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm ${isRoot ? "border-emerald-400 ring-2 ring-emerald-400/15" : "border-slate-200 dark:border-white/10"}`}>
-                    <div className="relative aspect-[16/10] overflow-hidden bg-slate-100 dark:bg-white/5">
-                      {image ? (
-                        <img src={image.src} alt={`Publicacion ${item.id}`} className="size-full object-cover" />
-                      ) : (
-                        <div className="flex size-full flex-col items-center justify-center gap-2 text-muted-foreground">
-                          <ImageIcon className="size-8" />
-                          <span className="text-xs">Sin imagen disponible</span>
-                        </div>
-                      )}
+                    <ComparisonImageCarousel publicationId={item.id} images={images}>
                       <div className="absolute left-3 top-3 flex flex-wrap gap-2">
                         <Badge className={isRoot ? "bg-emerald-600 text-white" : "bg-black/70 text-white"}>#{item.id}{isRoot ? " · seleccionada" : ""}</Badge>
                         {item.estado && <Badge className={item.estado === "confirmada" ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}>{item.estado}</Badge>}
                       </div>
-                      {images.length > 1 && (
-                        <>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="icon"
-                            aria-label={`Foto anterior de la publicacion ${item.id}`}
-                            className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
-                            onClick={() => setComparisonImageIndexes((current) => ({
-                              ...current,
-                              [item.id]: (imageIndex - 1 + images.length) % images.length,
-                            }))}
-                          >
-                            <ChevronLeft className="size-5" />
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="icon"
-                            aria-label={`Foto siguiente de la publicacion ${item.id}`}
-                            className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-white/30 bg-black/55 text-white shadow-lg backdrop-blur hover:bg-black/75 hover:text-white"
-                            onClick={() => setComparisonImageIndexes((current) => ({
-                              ...current,
-                              [item.id]: (imageIndex + 1) % images.length,
-                            }))}
-                          >
-                            <ChevronRight className="size-5" />
-                          </Button>
-                          <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
-                            {imageIndex + 1} / {images.length}
-                          </span>
-                        </>
-                      )}
-                    </div>
+                    </ComparisonImageCarousel>
                     <div className="space-y-4 p-4">
                       <div>
                         <div className="flex flex-wrap items-center justify-between gap-2">
