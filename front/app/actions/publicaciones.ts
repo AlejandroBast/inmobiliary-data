@@ -5,7 +5,8 @@ import path from "node:path"
 import { db, pool } from "@/lib/db"
 import { fuentesInmobiliarias, publicaciones } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
-import type { RowDataPacket } from "mysql2"
+import type { ResultSetHeader, RowDataPacket } from "mysql2"
+import type { PoolConnection } from "mysql2/promise"
 import { revalidatePath } from "next/cache"
 
 export type PublicacionFilters = {
@@ -88,6 +89,7 @@ export type CoincidenciaPublicacion = {
 
 export type ComparacionPublicacion = {
   id: number
+  coincidenciaId: number | null
   fuenteNombre: string | null
   linkOrigen: string
   codigoExterno: string | null
@@ -122,6 +124,27 @@ interface CoincidenciaRow extends RowDataPacket {
   precioCandidata: string | number
   fuentePublicacion: string | null
   fuenteCandidata: string | null
+}
+
+interface CoincidenciaRevisionRow extends RowDataPacket {
+  id: number
+  publicacionId: number
+  candidataId: number
+  estado: "pendiente" | "confirmada" | "descartada"
+}
+
+interface GrupoDuplicadosRow extends RowDataPacket {
+  inmuebleId: number
+  estado: "automatico" | "pendiente" | "confirmado"
+}
+
+interface MiembroGrupoRow extends RowDataPacket {
+  publicacionId: number
+}
+
+interface AristaGrupoRow extends RowDataPacket {
+  publicacionId: number
+  candidataId: number
 }
 
 function cleanFilter(value?: string | null) {
@@ -479,6 +502,7 @@ export async function getComparacionPublicaciones(publicacionId: number): Promis
       const match = matchById.get(id)
       return {
         id,
+        coincidenciaId: match == null ? null : Number(match.id),
         fuenteNombre: row.fuente_nombre == null ? null : String(row.fuente_nombre),
         linkOrigen: String(row.link_origen),
         codigoExterno: row.codigo_externo == null ? null : String(row.codigo_externo),
@@ -502,6 +526,161 @@ export async function getComparacionPublicaciones(publicacionId: number): Promis
       }
     })
     .sort((first, second) => first.id === publicacionId ? -1 : second.id === publicacionId ? 1 : (second.puntaje ?? 0) - (first.puntaje ?? 0))
+}
+
+function connectedDuplicateComponents(publicationIds: number[], edges: AristaGrupoRow[]) {
+  const adjacency = new Map<number, Set<number>>(
+    publicationIds.map((publicationId) => [publicationId, new Set<number>()]),
+  )
+
+  for (const edge of edges) {
+    const firstId = Number(edge.publicacionId)
+    const secondId = Number(edge.candidataId)
+    if (!adjacency.has(firstId) || !adjacency.has(secondId)) continue
+    adjacency.get(firstId)?.add(secondId)
+    adjacency.get(secondId)?.add(firstId)
+  }
+
+  const visited = new Set<number>()
+  const components: number[][] = []
+  for (const publicationId of publicationIds) {
+    if (visited.has(publicationId)) continue
+    const component: number[] = []
+    const pending = [publicationId]
+    visited.add(publicationId)
+
+    while (pending.length > 0) {
+      const currentId = pending.pop()
+      if (currentId == null) continue
+      component.push(currentId)
+      for (const neighborId of adjacency.get(currentId) ?? []) {
+        if (visited.has(neighborId)) continue
+        visited.add(neighborId)
+        pending.push(neighborId)
+      }
+    }
+    components.push(component)
+  }
+
+  return components
+}
+
+async function rebuildDuplicateGroup(
+  connection: PoolConnection,
+  groupId: number,
+  groupState: GrupoDuplicadosRow["estado"],
+) {
+  const [memberRows] = await connection.query<MiembroGrupoRow[]>(
+    `SELECT publicacion_id AS publicacionId
+     FROM publicaciones_inmueble
+     WHERE inmueble_id = ?
+     FOR UPDATE`,
+    [groupId],
+  )
+  const memberIds = memberRows.map((row) => Number(row.publicacionId))
+
+  if (memberIds.length < 2) {
+    await connection.query("DELETE FROM inmuebles_detectados WHERE id = ?", [groupId])
+    return
+  }
+
+  const placeholders = memberIds.map(() => "?").join(", ")
+  const [edges] = await connection.query<AristaGrupoRow[]>(
+    `SELECT publicacion_id AS publicacionId, candidata_id AS candidataId
+     FROM coincidencias_publicaciones
+     WHERE estado = 'confirmada'
+       AND publicacion_id IN (${placeholders})
+       AND candidata_id IN (${placeholders})`,
+    [...memberIds, ...memberIds],
+  )
+  const groupedComponents = connectedDuplicateComponents(memberIds, edges)
+    .filter((component) => component.length >= 2)
+    .sort((first, second) => second.length - first.length)
+
+  if (groupedComponents.length === 0) {
+    await connection.query("DELETE FROM inmuebles_detectados WHERE id = ?", [groupId])
+    return
+  }
+
+  const stillGrouped = new Set(groupedComponents.flat())
+  const singlePublications = memberIds.filter((publicationId) => !stillGrouped.has(publicationId))
+  if (singlePublications.length > 0) {
+    const singlePlaceholders = singlePublications.map(() => "?").join(", ")
+    await connection.query(
+      `DELETE FROM publicaciones_inmueble
+       WHERE inmueble_id = ? AND publicacion_id IN (${singlePlaceholders})`,
+      [groupId, ...singlePublications],
+    )
+  }
+
+  for (const component of groupedComponents.slice(1)) {
+    const [createdGroup] = await connection.query<ResultSetHeader>(
+      "INSERT INTO inmuebles_detectados (estado) VALUES (?)",
+      [groupState],
+    )
+    const componentPlaceholders = component.map(() => "?").join(", ")
+    await connection.query(
+      `UPDATE publicaciones_inmueble
+       SET inmueble_id = ?
+       WHERE inmueble_id = ? AND publicacion_id IN (${componentPlaceholders})`,
+      [createdGroup.insertId, groupId, ...component],
+    )
+  }
+}
+
+export async function descartarCoincidenciaPublicaciones(coincidenciaId: number) {
+  if (!Number.isInteger(coincidenciaId) || coincidenciaId <= 0) {
+    return { success: false as const, error: "La coincidencia seleccionada no es valida." }
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [matches] = await connection.query<CoincidenciaRevisionRow[]>(
+      `SELECT id, publicacion_id AS publicacionId, candidata_id AS candidataId, estado
+       FROM coincidencias_publicaciones
+       WHERE id = ?
+       FOR UPDATE`,
+      [coincidenciaId],
+    )
+    const match = matches[0]
+    if (!match) throw new Error("La coincidencia ya no existe.")
+
+    await connection.query(
+      `UPDATE coincidencias_publicaciones
+       SET estado = 'descartada', fecha_revision = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [coincidenciaId],
+    )
+
+    if (match.estado === "confirmada") {
+      const [groupRows] = await connection.query<GrupoDuplicadosRow[]>(
+        `SELECT pi.inmueble_id AS inmuebleId, inmueble.estado
+         FROM publicaciones_inmueble pi
+         JOIN inmuebles_detectados inmueble ON inmueble.id = pi.inmueble_id
+         WHERE pi.publicacion_id IN (?, ?)
+         FOR UPDATE`,
+        [Number(match.publicacionId), Number(match.candidataId)],
+      )
+      const affectedGroups = new Map<number, GrupoDuplicadosRow["estado"]>()
+      for (const row of groupRows) {
+        affectedGroups.set(Number(row.inmuebleId), row.estado)
+      }
+      for (const [groupId, groupState] of affectedGroups) {
+        await rebuildDuplicateGroup(connection, groupId, groupState)
+      }
+    }
+
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    return { success: false as const, error: parseError(error) }
+  } finally {
+    connection.release()
+  }
+
+  revalidatePath("/")
+  return { success: true as const }
 }
 
 function normalizeStoredLinks(input: PublicacionLinkValidationInput) {

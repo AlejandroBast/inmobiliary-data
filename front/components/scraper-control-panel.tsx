@@ -42,25 +42,29 @@ export function ScraperControlPanel() {
   const [jobs, setJobs] = useState<Partial<Record<SourceId, Job>>>({})
   const [loading, setLoading] = useState(true)
   const lastPublicationsRefresh = useRef(0)
-  const hadActiveScan = useRef(false)
+  const hadActiveProcess = useRef(false)
+  const statusRequestId = useRef(0)
 
   const refresh = useCallback(async () => {
+    const requestId = ++statusRequestId.current
     try {
       const response = await fetch("/api/scrapers", { cache: "no-store" })
       const data = (await response.json()) as { jobs: Job[] }
+      if (requestId !== statusRequestId.current) return
       setJobs(Object.fromEntries(data.jobs.map((job) => [job.sourceId, job])))
 
-      const hasActiveScan = data.jobs.some((job) => job.state === "running" || job.state === "cancelling")
+      const hasRunningScraper = data.jobs.some((job) => job.state === "running")
+      const hasActiveProcess = data.jobs.some((job) => job.state === "running" || job.state === "cancelling")
       const now = Date.now()
-      const scanJustFinished = hadActiveScan.current && !hasActiveScan
+      const scanJustFinished = hadActiveProcess.current && !hasActiveProcess
 
       // router.refresh actualiza los Server Components y la tabla sin recargar
-      // la pestaña ni perder el estado local de los componentes cliente.
-      if (scanJustFinished || (hasActiveScan && now - lastPublicationsRefresh.current >= 4000)) {
+      // la pestaña. El intervalo de 4 segundos solo corre durante un scraper.
+      if (scanJustFinished || (hasRunningScraper && now - lastPublicationsRefresh.current >= 4000)) {
         lastPublicationsRefresh.current = now
         router.refresh()
       }
-      hadActiveScan.current = hasActiveScan
+      hadActiveProcess.current = hasActiveProcess
     } catch {
       // Se conserva el último estado visible si falla un sondeo puntual.
     } finally {

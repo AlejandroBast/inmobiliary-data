@@ -25,6 +25,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   deletePublicacion,
+  descartarCoincidenciaPublicaciones,
   getComparacionPublicaciones,
   updateNotaPublicacion,
   validatePublicacionLinks,
@@ -45,6 +46,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CheckCircle2,
+  CircleX,
   Columns3,
   ExternalLink,
   Eye,
@@ -63,6 +65,11 @@ import { toast } from "sonner"
 type Row = Record<string, any> & { id: number; coincidencias?: CoincidenciaPublicacion[] }
 type ImageItem = { name: string; src: string }
 type HtmlItem = { name: string; src: string }
+type ComparisonDismissTarget = {
+  coincidenciaId: number
+  rootId: number
+  relatedId: number
+}
 
 function ComparisonImageCarousel({
   publicationId,
@@ -238,6 +245,8 @@ export function PublicacionesManagerPro({
   const [comparisonRows, setComparisonRows] = useState<ComparacionPublicacion[]>([])
   const [comparisonImages, setComparisonImages] = useState<Record<number, ImageItem[]>>({})
   const [comparisonLoading, setComparisonLoading] = useState(false)
+  const [comparisonToDismiss, setComparisonToDismiss] = useState<ComparisonDismissTarget | null>(null)
+  const [comparisonDismissLoading, setComparisonDismissLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -341,6 +350,7 @@ export function PublicacionesManagerPro({
 
   async function openComparison(row: Row) {
     setDetail(null)
+    setComparisonToDismiss(null)
     setComparisonRootId(row.id)
     setComparisonRows([])
     setComparisonImages({})
@@ -366,6 +376,42 @@ export function PublicacionesManagerPro({
       setComparisonRootId(null)
     } finally {
       setComparisonLoading(false)
+    }
+  }
+
+  async function confirmDismissComparison() {
+    const target = comparisonToDismiss
+    if (!target || comparisonDismissLoading) return
+
+    setComparisonDismissLoading(true)
+    try {
+      const result = await descartarCoincidenciaPublicaciones(target.coincidenciaId)
+      if (!result.success) {
+        toast.error("No se pudo descartar la coincidencia", { description: result.error })
+        return
+      }
+
+      const remainingRows = comparisonRows.filter((item) => item.id !== target.relatedId)
+      setComparisonRows(remainingRows)
+      setComparisonImages((current) => {
+        const next = { ...current }
+        delete next[target.relatedId]
+        return next
+      })
+      setComparisonToDismiss(null)
+      if (!remainingRows.some((item) => item.id !== target.rootId)) {
+        setComparisonRootId(null)
+      }
+      toast.success("Publicaciones marcadas como no repetidas", {
+        description: `La relacion entre #${target.rootId} y #${target.relatedId} fue descartada.`,
+      })
+      router.refresh()
+    } catch (error) {
+      toast.error("No se pudo descartar la coincidencia", {
+        description: error instanceof Error ? error.message : "Error desconocido",
+      })
+    } finally {
+      setComparisonDismissLoading(false)
     }
   }
 
@@ -844,7 +890,15 @@ export function PublicacionesManagerPro({
         </DialogContent>
       </Dialog>
 
-      <Dialog open={comparisonRootId !== null} onOpenChange={(open) => !open && setComparisonRootId(null)}>
+      <Dialog
+        open={comparisonRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setComparisonRootId(null)
+            setComparisonToDismiss(null)
+          }
+        }}
+      >
         <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -896,10 +950,30 @@ export function PublicacionesManagerPro({
                         <CompareValue label="Dirección" value={item.direccion || "-"} className="col-span-2" />
                       </div>
                       {item.descripcion && <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>}
-                      <Button type="button" variant="outline" className="w-full gap-2" onClick={() => window.open(item.linkOrigen, "_blank", "noopener,noreferrer")}>
-                        <ExternalLink className="size-4" />
-                        Abrir publicación original
-                      </Button>
+                      <div className="space-y-2">
+                        {!isRoot && item.coincidenciaId !== null && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full gap-2 border-red-300 text-red-700 hover:border-red-400 hover:bg-red-50 hover:text-red-800 dark:border-red-400/30 dark:text-red-300 dark:hover:bg-red-400/10 dark:hover:text-red-200"
+                            onClick={() => {
+                              if (comparisonRootId == null || item.coincidenciaId == null) return
+                              setComparisonToDismiss({
+                                coincidenciaId: item.coincidenciaId,
+                                rootId: comparisonRootId,
+                                relatedId: item.id,
+                              })
+                            }}
+                          >
+                            <CircleX className="size-4" />
+                            No es repetida
+                          </Button>
+                        )}
+                        <Button type="button" variant="outline" className="w-full gap-2" onClick={() => window.open(item.linkOrigen, "_blank", "noopener,noreferrer")}>
+                          <ExternalLink className="size-4" />
+                          Abrir publicación original
+                        </Button>
+                      </div>
                     </div>
                   </article>
                 )
@@ -910,6 +984,45 @@ export function PublicacionesManagerPro({
               No se encontraron publicaciones relacionadas para comparar.
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={comparisonToDismiss !== null}
+        onOpenChange={(open) => {
+          if (!open && !comparisonDismissLoading) setComparisonToDismiss(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CircleX className="size-5 text-red-600 dark:text-red-300" />
+              Marcar como no repetidas
+            </DialogTitle>
+            <DialogDescription>
+              Las publicaciones #{comparisonToDismiss?.rootId} y #{comparisonToDismiss?.relatedId} dejarán de aparecer como coincidencia. No se eliminará ninguna publicación ni sus imágenes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setComparisonToDismiss(null)}
+              disabled={comparisonDismissLoading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void confirmDismissComparison()}
+              disabled={comparisonDismissLoading}
+              className="gap-2"
+            >
+              {comparisonDismissLoading ? <Loader2 className="size-4 animate-spin" /> : <CircleX className="size-4" />}
+              {comparisonDismissLoading ? "Marcando..." : "Sí, no son repetidas"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
