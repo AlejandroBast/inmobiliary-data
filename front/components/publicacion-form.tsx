@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useTransition } from "react"
+import { useEffect, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -26,8 +26,10 @@ import { toast } from "sonner"
 import { createPublicacion, updatePublicacion, type PublicacionInput } from "@/app/actions/publicaciones"
 import type { Fuente } from "@/lib/db/schema"
 import { NuevaFuenteDialog } from "./nueva-fuente-dialog"
+import { ImageIcon, Loader2, X } from "lucide-react"
 
 type Row = Record<string, unknown> & { id: number }
+type ImageItem = { name: string; src: string }
 
 export function PublicacionForm({
   fuentes,
@@ -43,6 +45,57 @@ export function PublicacionForm({
   const [isPending, startTransition] = useTransition()
   const [fuenteList, setFuenteList] = useState<Fuente[]>(fuentes)
   const [fuenteId, setFuenteId] = useState<string>(editing ? String(editing.fuenteId) : "")
+  const [images, setImages] = useState<ImageItem[]>([])
+  const [imagesLoading, setImagesLoading] = useState(false)
+  const [deletingImage, setDeletingImage] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFuenteId(editing ? String(editing.fuenteId) : "")
+  }, [editing])
+
+  useEffect(() => {
+    if (!open || !editing) {
+      setImages([])
+      setImagesLoading(false)
+      setDeletingImage(null)
+      return
+    }
+
+    const controller = new AbortController()
+    setImagesLoading(true)
+    fetch(`/api/publicaciones/${editing.id}/imagenes`, { signal: controller.signal })
+      .then(async (response) => response.ok ? response.json() as Promise<{ images?: ImageItem[] }> : { images: [] })
+      .then((data) => setImages(Array.isArray(data.images) ? data.images : []))
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) setImages([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setImagesLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [editing, open])
+
+  async function deleteImage(image: ImageItem) {
+    if (!editing || deletingImage) return
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar esta imagen?\n\n${image.name}\n\nEsta acción no se puede deshacer.`)) return
+
+    setDeletingImage(image.name)
+    try {
+      const response = await fetch(`/api/publicaciones/${editing.id}/imagenes/${encodeURIComponent(image.name)}`, { method: "DELETE" })
+      const result = await response.json() as { success?: boolean; error?: string }
+      if (!response.ok || !result.success) {
+        toast.error(result.error || "No se pudo eliminar la imagen.")
+        return
+      }
+      setImages((current) => current.filter((item) => item.name !== image.name))
+      toast.success("Imagen eliminada.")
+    } catch {
+      toast.error("No se pudo eliminar la imagen.")
+    } finally {
+      setDeletingImage(null)
+    }
+  }
 
   const val = (key: string) => {
     const v = editing?.[key]
@@ -303,6 +356,47 @@ export function PublicacionForm({
               <Textarea id="notas" name="notas" rows={2} defaultValue={val("notas")} />
             </div>
           </fieldset>
+
+          {editing && (
+            <fieldset className="space-y-3">
+              <div>
+                <legend className="text-sm font-medium text-muted-foreground">Imagenes guardadas</legend>
+                <p className="text-xs text-muted-foreground">Elimina las capturas que no correspondan a esta publicacion.</p>
+              </div>
+              {imagesLoading ? (
+                <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" /> Cargando imagenes...
+                </div>
+              ) : images.length === 0 ? (
+                <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                  <ImageIcon className="size-4" /> Esta publicacion no tiene imagenes guardadas.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {images.map((image) => (
+                    <div key={image.name} className="group relative overflow-hidden rounded-lg border bg-muted">
+                      <img src={image.src} alt={image.name} className="aspect-[4/3] w-full object-cover transition group-hover:brightness-75" loading="lazy" />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="absolute right-2 top-2 size-9 rounded-full border-2 border-white bg-red-600 text-white opacity-0 shadow-lg transition hover:bg-red-700 group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label={`Eliminar ${image.name}`}
+                        title="Eliminar imagen"
+                        disabled={deletingImage !== null}
+                        onClick={() => void deleteImage(image)}
+                      >
+                        {deletingImage === image.name ? <Loader2 className="size-5 animate-spin" /> : <X className="size-5 stroke-[3]" />}
+                      </Button>
+                      <div className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1.5 text-xs text-white opacity-0 transition group-hover:opacity-100" title={image.name}>
+                        {image.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </fieldset>
+          )}
         </form>
 
         <DialogFooter>
