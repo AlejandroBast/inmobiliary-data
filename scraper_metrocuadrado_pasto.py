@@ -14,6 +14,7 @@ from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from duplicate_detector import detect_duplicates_safely
+from location_normalizer import location_diagnostic, resolve_pasto_location
 from scraper_audit import ScraperAudit
 
 
@@ -682,6 +683,14 @@ def extract_publication_data(page, url, fuente_id):
 
     descripcion = regex_value(source, r'"comment"\s*:\s*"((?:\\.|[^"])*)"')
     descripcion = decode_json_text(descripcion)
+    location_result = resolve_pasto_location(
+        barrio, title=title, description=descripcion, address=direccion, city=ciudad
+    )
+    print(f"[UBICACION] {location_diagnostic(location_result)}")
+    if location_result.outside_municipality:
+        return None, html, []
+    barrio = location_result.value if location_result.accepted else None
+    direccion = clean_text(", ".join(value for value in [barrio, ciudad, "Nariño"] if value))
 
     m2 = regex_number(source, r'"area"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?')
     m2_construido = regex_number(source, r'"areac"\s*:\s*"?(\d+(?:[\.,]\d+)?)"?')
@@ -698,7 +707,7 @@ def extract_publication_data(page, url, fuente_id):
         "fuente_id": fuente_id,
         "codigo_externo": codigo_externo,
         "link_origen": url,
-        "links_adicionales": None,
+        "links_adicionales": json.dumps({"normalizacion_ubicacion": location_diagnostic(location_result)}, ensure_ascii=False),
         "coordenadas": coordenadas,
         "latitud": latitud,
         "longitud": longitud,
