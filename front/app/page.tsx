@@ -137,6 +137,8 @@ export default async function Page({
           <PublicacionesManagerPro
             publicaciones={publicacionesConCoincidencias}
             fuentes={fuentes}
+            barrios={barriosData.barrios}
+            hasSinBarrio={barriosData.hasSinBarrio}
             hasActiveFilters={filtrosActivos}
           />
         </section>
