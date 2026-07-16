@@ -16,6 +16,7 @@ from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 from duplicate_detector import detect_duplicates_safely
+from location_normalizer import location_diagnostic, resolve_pasto_location
 from scraper_audit import ScraperAudit
 
 
@@ -1702,11 +1703,20 @@ def extract_publication_data(page, url, fuente_id):
     administracion = extract_administracion(lines, text)
     ph = extract_ph(descripcion)
 
+    location_result = resolve_pasto_location(
+        barrio, title=title, description=descripcion, address=direccion, city=ciudad, ph=ph
+    )
+    print(f"[UBICACION] {location_diagnostic(location_result)}")
+    if location_result.outside_municipality:
+        return None, html, "fuera_de_pasto"
+    barrio = location_result.value if location_result.accepted else None
+
     direccion = direccion or clean_text(", ".join([value for value in [barrio, ciudad or "Pasto", "Nariño"] if value]))
 
     links_adicionales = {
         "fuente_busqueda": SEARCH_URL,
-        "maps": None
+        "maps": None,
+        "normalizacion_ubicacion": location_diagnostic(location_result),
     }
 
     data = {
