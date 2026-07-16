@@ -540,7 +540,7 @@ export function PublicacionesManagerPro({
                 <TableRow className="bg-slate-100/80 dark:bg-zinc-900">
                   <TableHead>ID</TableHead>
                   <TableHead>Publicacion</TableHead>
-                  <TableHead>Ubicacion</TableHead>
+                  <TableHead>Barrio</TableHead>
                   <TableHead>Fuente</TableHead>
                   <TableHead className="text-right">Precio</TableHead>
                   <TableHead className="text-right">Area</TableHead>
