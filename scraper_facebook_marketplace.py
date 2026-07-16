@@ -30,6 +30,7 @@ except ImportError:
     sync_playwright = None
 
 from duplicate_detector import detect_duplicates_safely
+from location_normalizer import location_diagnostic, resolve_pasto_location
 from scraper_audit import ScraperAudit
 
 
@@ -1146,6 +1147,13 @@ def extract_publication_data(page, link):
     barrio = extract_barrio(title, full_text)
     ciudad = extract_city(title, full_text)
     location = embedded.get("location") or extract_location(listing_text) or extract_location(body_text)
+    location_result = resolve_pasto_location(
+        barrio, title=title, description=full_text, address=location, city=ciudad
+    )
+    print(f"[UBICACION] {location_diagnostic(location_result)}")
+    if location_result.outside_municipality:
+        return None, html, [], "fuera_de_pasto"
+    barrio = location_result.value if location_result.accepted else None
     image_urls = extract_image_urls(page, link)
     seller = extract_seller(page, body_text)
 
@@ -1156,6 +1164,7 @@ def extract_publication_data(page, link):
         "imagenes_detectadas": image_urls,
         "min_sale_price": MIN_SALE_PRICE,
         "contenido_filtrado": listing_text[:3000],
+        "normalizacion_ubicacion": location_diagnostic(location_result),
     }
     data = {
         "codigo_externo": f"FB {item_id}" if item_id else None,
