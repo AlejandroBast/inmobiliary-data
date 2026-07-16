@@ -34,6 +34,7 @@ import {
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
 import { PublicacionForm } from "@/components/publicacion-form"
+import { PublicacionesColumnFilters } from "@/components/publicaciones-column-filters"
 import { formatCOP, formatDate, formatNumber } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
 import {
@@ -59,6 +60,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  X,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -223,10 +225,14 @@ function duplicateLabel(coincidencias: CoincidenciaPublicacion[]) {
 export function PublicacionesManagerPro({
   publicaciones,
   fuentes,
+  barrios,
+  hasSinBarrio,
   hasActiveFilters,
 }: {
   publicaciones: Row[]
   fuentes: Fuente[]
+  barrios: Array<{ value: string; label: string }>
+  hasSinBarrio: boolean
   hasActiveFilters: boolean
 }) {
   const [formOpen, setFormOpen] = useState(false)
@@ -237,6 +243,7 @@ export function PublicacionesManagerPro({
   const [linkStatuses, setLinkStatuses] = useState<Record<number, PublicacionLinkStatus>>({})
   const [linksLoading, setLinksLoading] = useState(false)
   const [imagesLoading, setImagesLoading] = useState(false)
+  const [detailImageDeleting, setDetailImageDeleting] = useState<string | null>(null)
   const [htmlLoading, setHtmlLoading] = useState(false)
   const [notaDraft, setNotaDraft] = useState("")
   const [notaSaving, setNotaSaving] = useState(false)
@@ -445,6 +452,33 @@ export function PublicacionesManagerPro({
     }
   }
 
+  async function deleteDetailImage(image: ImageItem) {
+    if (!detail || detailImageDeleting) return
+    const confirmed = window.confirm(
+      `¿Estás seguro de que deseas eliminar esta imagen?\n\n${image.name}\n\nEsta acción no se puede deshacer.`,
+    )
+    if (!confirmed) return
+
+    setDetailImageDeleting(image.name)
+    try {
+      const response = await fetch(
+        `/api/publicaciones/${detail.id}/imagenes/${encodeURIComponent(image.name)}`,
+        { method: "DELETE" },
+      )
+      const result = await response.json() as { success?: boolean; error?: string }
+      if (!response.ok || !result.success) {
+        toast.error(result.error || "No se pudo eliminar la imagen.")
+        return
+      }
+      setDetailImages((current) => current.filter((item) => item.name !== image.name))
+      toast.success("Imagen eliminada.")
+    } catch {
+      toast.error("No se pudo eliminar la imagen.")
+    } finally {
+      setDetailImageDeleting(null)
+    }
+  }
+
   function openHtmlFile() {
     const htmlFile = detailHtmlFiles[0]
     if (!htmlFile) return
@@ -516,6 +550,7 @@ export function PublicacionesManagerPro({
                   <TableHead>Captura</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
+                <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} hasSinBarrio={hasSinBarrio} />
               </TableHeader>
               <TableBody>
                 {visiblePublicaciones.map((p, index) => (
@@ -810,9 +845,29 @@ export function PublicacionesManagerPro({
                 ) : detailImages.length ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {detailImages.map((image) => (
-                      <a key={image.src} href={image.src} target="_blank" rel="noopener noreferrer" className="overflow-hidden rounded-lg border bg-muted">
-                        <img src={image.src} alt={`Imagen de publicacion ${detail.id}`} className="h-28 w-full object-cover transition-transform hover:scale-105" />
-                      </a>
+                      <div key={image.src} className="group relative overflow-hidden rounded-lg border bg-muted">
+                        <a href={image.src} target="_blank" rel="noopener noreferrer" className="block">
+                          <img
+                            src={image.src}
+                            alt={`Imagen de publicacion ${detail.id}`}
+                            className="h-28 w-full object-cover transition group-hover:brightness-75"
+                          />
+                        </a>
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="icon"
+                          title="Eliminar imagen"
+                          aria-label={`Eliminar ${image.name}`}
+                          disabled={detailImageDeleting !== null}
+                          onClick={() => void deleteDetailImage(image)}
+                          className="absolute right-2 top-2 z-10 size-9 rounded-full border-2 border-white bg-red-600 text-white opacity-0 shadow-lg transition hover:bg-red-700 group-hover:opacity-100 focus-visible:opacity-100"
+                        >
+                          {detailImageDeleting === image.name
+                            ? <Loader2 className="size-5 animate-spin" />
+                            : <X className="size-5 stroke-[3]" />}
+                        </Button>
+                      </div>
                     ))}
                   </div>
                 ) : (
