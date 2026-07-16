@@ -25,6 +25,7 @@ except ImportError:
         return None
 
 from duplicate_detector import detect_duplicates_safely
+from location_normalizer import location_diagnostic, resolve_pasto_location
 from scraper_audit import ScraperAudit
 
 
@@ -982,11 +983,14 @@ def extract_publication_data(url, tipo_hint=None):
         extract_barrio(title, full_detail_text)
         or extract_location_hint(title, full_detail_text, edificio_conjunto=edificio_conjunto)
     )
-    if not barrio:
-        print(f"[SKIP] Venta con precio pero sin barrio identificable: {title}")
-        return None, html, [], "sin_barrio"
-
     ph = extract_ph_value(full_detail_text, edificio_conjunto=edificio_conjunto)
+    location_result = resolve_pasto_location(
+        barrio, title=title, description=full_detail_text, city=ciudad, ph=ph
+    )
+    print(f"[UBICACION] {location_diagnostic(location_result)}")
+    if location_result.outside_municipality:
+        return None, html, [], "fuera_de_pasto"
+    barrio = location_result.value if location_result.accepted else None
 
     direccion_parts = [barrio, ciudad, "Nariño"]
     direccion = clean_text(", ".join(value for value in direccion_parts if value))
@@ -1000,6 +1004,7 @@ def extract_publication_data(url, tipo_hint=None):
         "precio_detectado_desde_detalle": price,
         "precio_negociable": is_price_negotiable(full_detail_text),
         "barrio_detectado": barrio,
+        "normalizacion_ubicacion": location_diagnostic(location_result),
         "ph_detectado": ph,
         "piso_ubicacion": extract_piso_ubicacion(full_detail_text),
         "imagenes_detectadas": image_urls,
