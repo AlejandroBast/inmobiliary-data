@@ -293,6 +293,8 @@ export function PublicacionesManager({
         <PublicacionForm
           key={editing ? `edit-${editing.id}` : "create"}
           fuentes={fuentes}
+          barrios={[]}
+          tiposInmueble={[]}
           open={formOpen}
           onOpenChange={setFormOpen}
           editing={editing}
