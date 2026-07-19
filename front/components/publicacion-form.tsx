@@ -22,6 +22,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+  ComboboxTriggerIcon,
+  withCreateOption,
+} from "@/components/ui/combobox"
 import { toast } from "sonner"
 import { createPublicacion, updatePublicacion, type PublicacionInput } from "@/app/actions/publicaciones"
 import type { Fuente } from "@/lib/db/schema"
@@ -33,24 +42,37 @@ type ImageItem = { name: string; src: string }
 
 export function PublicacionForm({
   fuentes,
+  barrios,
+  tiposInmueble,
   open,
   onOpenChange,
   editing,
 }: {
   fuentes: Fuente[]
+  barrios: Array<{ value: string; label: string }>
+  tiposInmueble: Array<{ value: string; label: string }>
   open: boolean
   onOpenChange: (open: boolean) => void
   editing?: Row | null
 }) {
+  const val = (key: string) => {
+    const v = editing?.[key]
+    return v === null || v === undefined ? "" : String(v)
+  }
+
   const [isPending, startTransition] = useTransition()
   const [fuenteList, setFuenteList] = useState<Fuente[]>(fuentes)
   const [fuenteId, setFuenteId] = useState<string>(editing ? String(editing.fuenteId) : "")
+  const [barrio, setBarrio] = useState<string>(editing ? val("barrio") : "")
+  const [tipoInmueble, setTipoInmueble] = useState<string>(editing ? val("tipoInmueble") : "")
   const [images, setImages] = useState<ImageItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
   const [deletingImage, setDeletingImage] = useState<string | null>(null)
 
   useEffect(() => {
     setFuenteId(editing ? String(editing.fuenteId) : "")
+    setBarrio(editing ? val("barrio") : "")
+    setTipoInmueble(editing ? val("tipoInmueble") : "")
   }, [editing])
 
   useEffect(() => {
@@ -97,11 +119,6 @@ export function PublicacionForm({
     }
   }
 
-  const val = (key: string) => {
-    const v = editing?.[key]
-    return v === null || v === undefined ? "" : String(v)
-  }
-
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const fd = new FormData(e.currentTarget)
@@ -133,8 +150,8 @@ export function PublicacionForm({
       longitud: str("longitud"),
       direccion: str("direccion"),
       ciudad: str("ciudad"),
-      barrio: str("barrio"),
-      tipoInmueble: str("tipoInmueble"),
+      barrio: barrio.trim() || null,
+      tipoInmueble: tipoInmueble || null,
       ph: str("ph"),
       estrato: num("estrato"),
       descripcion: str("descripcion"),
@@ -254,7 +271,25 @@ export function PublicacionForm({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="barrio">Barrio</Label>
-                <Input id="barrio" name="barrio" defaultValue={val("barrio")} />
+                <Combobox
+                  items={withCreateOption(barrios, barrio)}
+                  value={barrio || null}
+                  onValueChange={(v) => setBarrio(v ?? "")}
+                  inputValue={barrio}
+                  onInputValueChange={setBarrio}
+                >
+                  <ComboboxInputGroup>
+                    <ComboboxInput id="barrio" placeholder="Selecciona o escribe un barrio" />
+                    <ComboboxTriggerIcon />
+                  </ComboboxInputGroup>
+                  <ComboboxContent emptyMessage="Sin coincidencias.">
+                    {(item: { value: string; label: string; __create?: true }) => (
+                      <ComboboxItem key={item.value} value={item.value} variant={item.__create ? "create" : "default"}>
+                        {item.__create ? `Crear "${item.label}"` : item.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxContent>
+                </Combobox>
               </div>
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
@@ -279,7 +314,18 @@ export function PublicacionForm({
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <Label htmlFor="tipoInmueble">Tipo de inmueble</Label>
-                <Input id="tipoInmueble" name="tipoInmueble" defaultValue={val("tipoInmueble")} placeholder="Apartamento, Casa..." />
+                <Select value={tipoInmueble} onValueChange={(v) => setTipoInmueble(v ?? "")}>
+                  <SelectTrigger className="w-full" id="tipoInmueble">
+                    <SelectValue placeholder="Selecciona un tipo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tiposInmueble.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ph">PH</Label>
