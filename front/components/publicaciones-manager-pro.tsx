@@ -177,7 +177,7 @@ function barrioLabel(value?: string | null) {
 }
 
 function phLabel(value?: string | null) {
-  return value?.trim() || "Sin edificio/conjunto"
+  return value?.trim() || "Sin PH"
 }
 
 function shortNote(value?: string | null) {
@@ -226,12 +226,14 @@ export function PublicacionesManagerPro({
   publicaciones,
   fuentes,
   barrios,
+  tiposInmueble,
   hasSinBarrio,
   hasActiveFilters,
 }: {
   publicaciones: Row[]
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
+  tiposInmueble: Array<{ value: string; label: string }>
   hasSinBarrio: boolean
   hasActiveFilters: boolean
 }) {
@@ -550,7 +552,7 @@ export function PublicacionesManagerPro({
                   <TableHead>Captura</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
-                <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} hasSinBarrio={hasSinBarrio} />
+                <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} tiposInmueble={tiposInmueble} hasSinBarrio={hasSinBarrio} />
               </TableHeader>
               <TableBody>
                 {visiblePublicaciones.map((p, index) => (
@@ -699,6 +701,8 @@ export function PublicacionesManagerPro({
         <PublicacionForm
           key={editing ? `edit-${editing.id}` : "create"}
           fuentes={fuentes}
+          barrios={barrios}
+          tiposInmueble={tiposInmueble}
           open={formOpen}
           onOpenChange={setFormOpen}
           editing={editing}
@@ -772,7 +776,7 @@ export function PublicacionesManagerPro({
                 <Detail label="Administracion" value={formatCOP(detail.administracion)} />
                 <Detail label="Barrio" value={barrioLabel(detail.barrio)} />
                 <Detail label="Ciudad" value={detail.ciudad || "-"} />
-                <Detail label="Edificio / conjunto" value={phLabel(detail.ph)} />
+                <Detail label="PH" value={phLabel(detail.ph)} />
                 <Detail label="Habitaciones" value={detail.habitaciones ?? "-"} />
                 <Detail label="Banos" value={detail.banios ?? "-"} />
                 <Detail label="Parqueaderos" value={detail.parqueadero ?? "-"} />
@@ -1001,7 +1005,7 @@ export function PublicacionesManagerPro({
                         <CompareValue label="Baños" value={item.banios ?? "-"} />
                         <CompareValue label="Parqueaderos" value={item.parqueadero ?? "-"} />
                         <CompareValue label="Estrato" value={item.estrato ?? "-"} />
-                        <CompareValue label="Edificio / conjunto" value={item.ph || "-"} className="col-span-2" />
+                        <CompareValue label="PH" value={item.ph || "-"} className="col-span-2" />
                         <CompareValue label="Dirección" value={item.direccion || "-"} className="col-span-2" />
                       </div>
                       {item.descripcion && <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>}
