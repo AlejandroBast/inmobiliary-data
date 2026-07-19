@@ -19,6 +19,22 @@ export const fuentesInmobiliarias = mysqlTable("fuentes_inmobiliarias", {
   descripcion: text("descripcion"),
 })
 
+export const barrios = mysqlTable("barrios", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 150 }).notNull(),
+  nombreNormalizado: varchar("nombre_normalizado", { length: 150 }).notNull(),
+  activo: boolean("activo").notNull().default(true),
+  fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
+})
+
+export const tiposInmueble = mysqlTable("tipos_inmueble", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 80 }).notNull(),
+  nombreNormalizado: varchar("nombre_normalizado", { length: 80 }).notNull(),
+  activo: boolean("activo").notNull().default(true),
+  fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
+})
+
 export const publicaciones = mysqlTable("publicaciones", {
   id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
   fuenteId: bigint("fuente_id", { mode: "number" }).notNull(),
@@ -52,3 +68,5 @@ export const publicaciones = mysqlTable("publicaciones", {
 
 export type Publicacion = typeof publicaciones.$inferSelect
 export type Fuente = typeof fuentesInmobiliarias.$inferSelect
+export type Barrio = typeof barrios.$inferSelect
+export type TipoInmueble = typeof tiposInmueble.$inferSelect
