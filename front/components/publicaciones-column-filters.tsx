@@ -32,8 +32,11 @@ function valuesFromParams(params: URLSearchParams): ColumnFilters {
   return Object.fromEntries(filterKeys.map((key) => [key, params.get(key) ?? ""])) as ColumnFilters
 }
 
-export function PublicacionesColumnFilters({ fuentes, barrios, hasSinBarrio }: {
-  fuentes: Fuente[]; barrios: Array<{ value: string; label: string }>; hasSinBarrio: boolean
+export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, hasSinBarrio }: {
+  fuentes: Fuente[]
+  barrios: Array<{ value: string; label: string }>
+  tiposInmueble: Array<{ value: string; label: string }>
+  hasSinBarrio: boolean
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -102,7 +105,7 @@ export function PublicacionesColumnFilters({ fuentes, barrios, hasSinBarrio }: {
           <div className="flex flex-wrap items-center gap-2 text-left font-normal">
             {openGroup === "id" && <Input type="number" placeholder="ID exacto" value={values.id} onChange={(e) => setField("id", e.target.value)} className={inputClass} />}
             {openGroup === "publicacion" && <>
-              <Input placeholder="Tipo de inmueble" value={values.tipoInmueble} onChange={(e) => setField("tipoInmueble", e.target.value)} className={inputClass} />
+              <select value={values.tipoInmueble} onChange={(e) => setField("tipoInmueble", e.target.value)} className={selectClass}><option value="">Todos los tipos</option>{tiposInmueble.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
               <select value={values.phTipo} onChange={(e) => setField("phTipo", e.target.value)} className={selectClass}><option value="">Todo PH</option><option value="ph">Con PH</option><option value="normal">Sin PH</option></select>
               <select value={values.duplicados} onChange={(e) => setField("duplicados", e.target.value)} className={selectClass}><option value="">Todas</option><option value="con">Repetidas</option><option value="sin">No repetidas</option></select>
             </>}
