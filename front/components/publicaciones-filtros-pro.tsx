@@ -102,11 +102,13 @@ function activeCount(values: FiltrosValue) {
 export function PublicacionesFiltrosPro({
   fuentes,
   barrios,
+  tiposInmueble,
   hasSinBarrio,
   initialValues,
 }: {
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
+  tiposInmueble: Array<{ value: string; label: string }>
   hasSinBarrio: boolean
   initialValues: Partial<FiltrosValue>
 }) {
@@ -232,18 +234,19 @@ export function PublicacionesFiltrosPro({
             />
           </Field>
           <Field label="Tipo de inmueble" htmlFor="filtro-tipo">
-            <Input
-              id="filtro-tipo"
-              list="tipos-inmueble"
-              placeholder="Casa, apartamento..."
-              value={values.tipoInmueble}
-              onChange={(event) => setField("tipoInmueble", event.target.value)}
-            />
-            <datalist id="tipos-inmueble">
-              {["Casa", "Apartamento", "Lote", "Casa lote", "Local", "Oficina", "Finca", "Otro"].map((item) => (
-                <option key={item} value={item} />
-              ))}
-            </datalist>
+            <Select value={values.tipoInmueble} onValueChange={(value) => setField("tipoInmueble", value ?? "")}>
+              <SelectTrigger id="filtro-tipo">
+                <SelectValue placeholder="Todos los tipos" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los tipos</SelectItem>
+                {tiposInmueble.map((tipo) => (
+                  <SelectItem key={tipo.value} value={tipo.value}>
+                    {tipo.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field label="Fuente" htmlFor="filtro-fuente">
             <Select value={values.fuenteId} onValueChange={(value) => setField("fuenteId", value ?? "")}>
