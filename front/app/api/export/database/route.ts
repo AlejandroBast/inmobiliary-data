@@ -194,7 +194,7 @@ function workbookFile(publicacionesRows: CellValue[][], fuentesRows: CellValue[]
           "Ciudad",
           "Barrio",
           "Tipo inmueble",
-          "Edificio / conjunto",
+          "PH",
           "Estrato",
           "Descripcion",
           "Precio",
