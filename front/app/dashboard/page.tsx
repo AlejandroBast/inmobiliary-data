@@ -3,6 +3,7 @@ import {
   getFuentes,
   getPublicaciones,
   getPublicacionesTotal,
+  getTiposInmueble,
   type PublicacionFilters,
 } from "@/app/actions/publicaciones"
 import { AppShell } from "@/components/app-shell"
@@ -60,11 +61,12 @@ export default async function DashboardPage({
     parqueadero: firstValue(params.parqueadero),
   }
 
-  const [publicaciones, fuentes, barriosData, totalPublicaciones] = await Promise.all([
+  const [publicaciones, fuentes, barriosData, totalPublicaciones, tiposInmueble] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
     getPublicacionesTotal(),
+    getTiposInmueble(),
   ])
 
   const publicacionesSearch = buildSearchString(params)
@@ -93,6 +95,7 @@ export default async function DashboardPage({
         <PublicacionesFiltrosPro
           fuentes={fuentes}
           barrios={barriosData.barrios}
+          tiposInmueble={tiposInmueble}
           hasSinBarrio={barriosData.hasSinBarrio}
           initialValues={{
             id: filtros.id ?? undefined,
