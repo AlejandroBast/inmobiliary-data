@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { db, pool } from "@/lib/db"
-import { fuentesInmobiliarias, publicaciones } from "@/lib/db/schema"
+import { barrios, fuentesInmobiliarias, publicaciones, tiposInmueble } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
 import type { ResultSetHeader, RowDataPacket } from "mysql2"
 import type { PoolConnection } from "mysql2/promise"
@@ -165,6 +165,8 @@ function parseNumericFilter(value?: string | null) {
   return Number.isNaN(parsed) ? null : { type: "eq" as const, value: parsed }
 }
 
+const DIACRITICS_RE = /[\u0300-\u036f]/g
+
 function normalizeBarrio(value?: string | null) {
   const normalized = value
     ?.normalize("NFD")
@@ -176,6 +178,87 @@ function normalizeBarrio(value?: string | null) {
     .trim()
 
   return normalized || null
+}
+
+// Clave de deduplicacion para el catalogo de barrios. Debe permanecer
+// algoritmicamente identica a normalize_barrio_key() en seed_catalogos.py
+// (mismos pasos, mismo orden, incluye folding de numerales romanos I-IV
+// heredado de location_normalizer.normalize_text) para que un barrio elegido
+// aqui y uno sembrado desde el TSV oficial resuelvan a la misma fila.
+function normalizeBarrioCatalogKey(value?: string | null) {
+  let text = value
+    ?.normalize("NFD")
+    .replace(DIACRITICS_RE, "")
+    .toLowerCase() ?? ""
+
+  text = text.replace(/\bxxiii\b/g, "23")
+  text = text.replace(/\biv\b/g, "4")
+  text = text.replace(/\biii\b/g, "3")
+  text = text.replace(/\bii\b/g, "2")
+  text = text.replace(/\bi\b/g, "1")
+  text = text.replace(/\b(?:et|etapa)\b/g, " ")
+  text = text.replace(/[^a-z0-9]+/g, " ").trim()
+  text = text.replace(/^(barrio|vereda|corregimiento|b|br|bo)\s+/, "")
+
+  return text.replace(/\s+/g, " ").trim() || null
+}
+
+function normalizeTipoInmuebleKey(value?: string | null) {
+  const text = value
+    ?.normalize("NFD")
+    .replace(DIACRITICS_RE, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+
+  return text || null
+}
+
+async function resolveOrCreateBarrio(rawNombre?: string | null): Promise<string | null> {
+  const nombre = rawNombre?.replace(/\s+/g, " ").trim()
+  if (!nombre) return null
+
+  const key = normalizeBarrioCatalogKey(nombre)
+  if (!key) return null
+
+  const [existing] = await db
+    .select({ nombre: barrios.nombre })
+    .from(barrios)
+    .where(eq(barrios.nombreNormalizado, key))
+    .limit(1)
+  if (existing) return existing.nombre
+
+  try {
+    await db.insert(barrios).values({ nombre, nombreNormalizado: key })
+    return nombre
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (message.includes("Duplicate entry") || message.includes("1062")) {
+      const [winner] = await db
+        .select({ nombre: barrios.nombre })
+        .from(barrios)
+        .where(eq(barrios.nombreNormalizado, key))
+        .limit(1)
+      if (winner) return winner.nombre
+    }
+    throw error
+  }
+}
+
+async function resolveTipoInmueble(rawNombre?: string | null): Promise<string | null> {
+  const nombre = rawNombre?.trim()
+  if (!nombre) return null
+
+  const key = normalizeTipoInmuebleKey(nombre)
+  if (!key) return null
+
+  const [existing] = await db
+    .select({ nombre: tiposInmueble.nombre })
+    .from(tiposInmueble)
+    .where(eq(tiposInmueble.nombreNormalizado, key))
+    .limit(1)
+
+  return existing?.nombre ?? null
 }
 
 function barrioSql() {
@@ -900,23 +983,10 @@ export async function getFuentes() {
 
 export async function getBarrios() {
   const rows = await db
-    .select({
-      barrio: publicaciones.barrio,
-    })
-    .from(publicaciones)
-    .where(sql`${publicaciones.barrio} IS NOT NULL AND TRIM(${publicaciones.barrio}) <> ''`)
-    .groupBy(publicaciones.barrio)
-    .orderBy(publicaciones.barrio)
-
-  const options = new Map<string, string>()
-
-  for (const row of rows) {
-    const normalized = normalizeBarrio(row.barrio)
-    const label = row.barrio?.replace(/\s+/g, " ").trim()
-    if (normalized && label && !options.has(normalized)) {
-      options.set(normalized, label)
-    }
-  }
+    .select({ nombre: barrios.nombre })
+    .from(barrios)
+    .where(eq(barrios.activo, true))
+    .orderBy(barrios.nombre)
 
   const [sinBarrio] = await db
     .select({
@@ -926,11 +996,19 @@ export async function getBarrios() {
     .where(sql`${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = ''`)
 
   return {
-    barrios: Array.from(options, ([value, label]) => ({ value, label })).sort((a, b) =>
-      a.label.localeCompare(b.label, "es"),
-    ),
+    barrios: rows.map((r) => ({ value: r.nombre, label: r.nombre })),
     hasSinBarrio: Number(sinBarrio?.total ?? 0) > 0,
   }
+}
+
+export async function getTiposInmueble() {
+  const rows = await db
+    .select({ nombre: tiposInmueble.nombre })
+    .from(tiposInmueble)
+    .where(eq(tiposInmueble.activo, true))
+    .orderBy(tiposInmueble.nombre)
+
+  return rows.map((r) => ({ value: r.nombre, label: r.nombre }))
 }
 
 export async function createFuente(input: { nombre: string; tipoFuente?: string | null; urlBase?: string | null }) {
@@ -967,7 +1045,13 @@ export async function createFuente(input: { nombre: string; tipoFuente?: string 
   }
 }
 
-function toValues(input: PublicacionInput) {
+async function toValues(input: PublicacionInput) {
+  const barrio = await resolveOrCreateBarrio(input.barrio)
+  const tipoInmueble = input.tipoInmueble ? await resolveTipoInmueble(input.tipoInmueble) : null
+  if (input.tipoInmueble && !tipoInmueble) {
+    throw new Error("Tipo de inmueble inválido: no existe en el catálogo.")
+  }
+
   return {
     fuenteId: input.fuenteId,
     codigoExterno: input.codigoExterno || null,
@@ -978,8 +1062,8 @@ function toValues(input: PublicacionInput) {
     longitud: input.longitud || null,
     direccion: input.direccion || null,
     ciudad: input.ciudad || null,
-    barrio: input.barrio || null,
-    tipoInmueble: input.tipoInmueble || null,
+    barrio,
+    tipoInmueble,
     ph: input.ph || null,
     estrato: input.estrato ?? null,
     descripcion: input.descripcion || null,
@@ -999,7 +1083,7 @@ function toValues(input: PublicacionInput) {
 // CREATE
 export async function createPublicacion(input: PublicacionInput) {
   try {
-    await db.insert(publicaciones).values(toValues(input))
+    await db.insert(publicaciones).values(await toValues(input))
     revalidatePath("/")
     return { success: true as const }
   } catch (error) {
@@ -1010,7 +1094,7 @@ export async function createPublicacion(input: PublicacionInput) {
 // UPDATE
 export async function updatePublicacion(id: number, input: PublicacionInput) {
   try {
-    await db.update(publicaciones).set(toValues(input)).where(eq(publicaciones.id, id))
+    await db.update(publicaciones).set(await toValues(input)).where(eq(publicaciones.id, id))
     revalidatePath("/")
     return { success: true as const }
   } catch (error) {
