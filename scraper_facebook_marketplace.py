@@ -153,6 +153,8 @@ OUT_OF_CITY_KEYWORDS = [
     "YACUANQUER",
     "TANGUA",
     "NARINO, NARINO",
+    "POPAYAN",
+    "PITALITO",
 ]
 
 UI_TITLE_REJECTS = {
@@ -855,29 +857,101 @@ def parse_money_digits(raw):
         return None
 
 
+MAX_REASONABLE_PRICE = 50_000_000_000
+
+PHONE_CONTEXT_PATTERN = re.compile(
+    r"\b(TEL\S*|CEL\S*|WHATSAPP|WSP|CONTACTO|LLAMAR|INFORMES?|MOVIL|NUMERO)\b"
+)
+
+
+def _sane_price(value):
+    if value and MIN_SALE_PRICE <= value <= MAX_REASONABLE_PRICE:
+        return value
+    return None
+
+
+def _has_phone_context_nearby(source, start, end, window=30):
+    left = source[max(0, start - window):start]
+    right = source[end:end + window]
+    return bool(PHONE_CONTEXT_PATTERN.search(left) or PHONE_CONTEXT_PATTERN.search(right))
+
+
+def _looks_like_phone_number(digits):
+    return len(digits) == 10 and digits[0] in "1367"
+
+
+def parse_marketplace_price_heuristics(text):
+    candidates = []
+    normalized_source = normalize_text(text)
+
+    unit_pattern = r"\b([0-9]{1,4}(?:[\.,][0-9]{1,3})?)\s*(MILLONES?|MILL\.?|MM|M)\b(?!2)"
+    for match in re.finditer(unit_pattern, normalized_source):
+        number = match.group(1).replace(",", ".")
+        try:
+            value = int(round(float(number) * 1_000_000))
+        except ValueError:
+            continue
+        if _sane_price(value):
+            candidates.append(value)
+
+    top_lines = get_lines(text)[:6]
+    for raw_line in top_lines:
+        match = re.fullmatch(r"\$?\s*([0-9]{2,4})", raw_line.strip())
+        if not match:
+            continue
+        number = int(match.group(1))
+        if 50 <= number <= 5000:
+            candidates.append(number * 1_000_000)
+
+    return candidates
+
+
 def extract_price(text):
-    source = text or ""
+    source = normalize_text(text or "")
     candidates = []
 
-    money_patterns = [
+    # Nivel 1 (dentro del texto libre): precio con simbolo $ o precedido de
+    # PRECIO/VALOR. Es la forma mas confiable de precio "visible" en el anuncio,
+    # por eso se evalua antes que cualquier heuristica de numero suelto.
+    explicit_patterns = [
         r"\$\s*([0-9]{1,3}(?:[\.\,\s][0-9]{3}){1,4})",
         r"(?:PRECIO|VALOR)\s*[:\-]?\s*\$?\s*([0-9][0-9\.\,\s]{6,})",
-        r"\b([0-9]{8,12})\b",
     ]
-    for pattern in money_patterns:
-        for match in re.finditer(pattern, normalize_text(source)):
+    for pattern in explicit_patterns:
+        for match in re.finditer(pattern, source):
             value = parse_money_digits(match.group(1))
-            if value and value >= MIN_SALE_PRICE:
+            if _sane_price(value):
                 candidates.append(value)
+    if candidates:
+        return max(candidates)
 
+    # Nivel 2: formatos tipicos de Marketplace en millones (450 millones, 450M, 450MM).
     million_pattern = r"\b([0-9]{2,4}(?:[\.,][0-9]{1,2})?)\s*(?:MILLONES|MILLON|MM)\b"
-    for match in re.finditer(million_pattern, normalize_text(source)):
+    for match in re.finditer(million_pattern, source):
         number = match.group(1).replace(",", ".")
         try:
             value = int(float(number) * 1_000_000)
         except ValueError:
             continue
-        if value >= MIN_SALE_PRICE:
+        if _sane_price(value):
+            candidates.append(value)
+
+    candidates.extend(v for v in parse_marketplace_price_heuristics(text or "") if _sane_price(v))
+    if candidates:
+        return max(candidates)
+
+    # Nivel 3 (ultimo recurso): numero suelto de 8-12 digitos sin simbolo de
+    # precio cerca. Es el patron mas riesgoso porque puede coincidir con un
+    # telefono/whatsapp, asi que se descartan numeros con forma de celular
+    # colombiano (10 digitos) y cualquier numero cercano a palabras de contacto.
+    for match in re.finditer(r"\b([0-9]{8,12})\b", source):
+        digits = match.group(1)
+        if _looks_like_phone_number(digits):
+            continue
+        if _has_phone_context_nearby(source, match.start(), match.end()):
+            continue
+        value = parse_money_digits(digits)
+        if _sane_price(value):
             candidates.append(value)
 
     return max(candidates) if candidates else None
@@ -913,34 +987,94 @@ def extract_property_type(title, description):
     return None
 
 
-def extract_barrio(title, description):
-    patterns = [
-        r"\bBARRIO\s+([A-Z0-9 \-]+)",
-        r"\bSECTOR\s+([A-Z0-9 \-]+)",
-        r"\bB\/\s*([A-Z0-9 \-]+)",
-    ]
-    source_lines = f"{title or ''}\n{description or ''}".splitlines()
-    for raw_line in source_lines:
+BARRIO_STRICT_PATTERNS = [
+    r"\bBARRIO\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bSECTOR\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bB\/\s*([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bUBICAD[OA]\s+EN\s+(?:EL\s+BARRIO\s+|EL\s+SECTOR\s+)?([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bUBICAD[OA]\s+BARRIO\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bUBICAD[OA]\s+SECTOR\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bEN\s+EL\s+BARRIO\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+    r"\bEN\s+EL\s+SECTOR\s+([A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,3})",
+]
+
+BARRIO_LOOSE_PATTERNS = [
+    r"\bEN\s+([A-Z][A-Z0-9\-]+(?:\s+[A-Z0-9\-]+){0,2})\b",
+]
+
+BARRIO_STOP_WORDS = (
+    r"\b(PASTO|NARINO|CONJUNTO|EDIFICIO|VENTA|VENDE|VENDO|VENDER|CONSTA|UBICAD[OA]|EN|"
+    r"CERCA|FRENTE|ADMINISTRACION|PRECIO|VALOR|INFORMES|CONTACTO|WHATSAPP|CASA|"
+    r"APARTAMENTO|APARTAESTUDIO|LOCAL|BODEGA|LOTE|FINCA|OFICINA|ESTRATO|PISO|PISOS|"
+    r"HABITACION\S*|BA\S*OS?|PARQUEADERO\S*|GARAJE\S*|AREA|METROS|MTS|M2)\b"
+)
+
+# Palabras que nunca son nombre de barrio: evitan que "en excelente estado",
+# "en zona tranquila" o "en conjunto cerrado" se confundan con una ubicacion.
+BARRIO_BLOCKLIST = {
+    "EXCELENTE", "BUEN", "BUENA", "BUENAS", "BUENOS", "ZONA", "ESTADO", "CONJUNTO",
+    "SECTOR", "CENTRICO", "CENTRICA", "TRANQUILO", "TRANQUILA", "VENTA", "ARRIENDO",
+    "TODO", "TODA", "ESTE", "ESTA", "GENERAL", "TOTAL", "PLENO", "PLENA",
+    "CONDICIONES", "OBRA", "CONSTRUCCION", "PROCESO", "PERFECTO", "PERFECTA",
+    "OPTIMO", "OPTIMA", "MUY", "MEJOR", "AMPLIO", "AMPLIA", "BONITO", "BONITA",
+}
+
+
+def _search_barrio_lines(lines, patterns):
+    for raw_line in lines:
         source = normalize_text(raw_line)
         for pattern in patterns:
             match = re.search(pattern, source)
             if not match:
                 continue
-            value = re.split(
-                r"\b(PASTO|NARINO|CONJUNTO|EDIFICIO|VENTA|VENDE|VENDO|CONSTA|UBICAD[OA])\b",
-                match.group(1),
-            )[0]
+            value = re.split(BARRIO_STOP_WORDS, match.group(1))[0]
             value = clean_text(value)
-            if value:
-                return value.title()
+            if not value:
+                continue
+            if value.split(" ")[0].upper() in BARRIO_BLOCKLIST:
+                continue
+            return value.title()
     return None
 
 
-def is_explicitly_out_of_city(title, description):
+def extract_barrio(title, description):
+    description_lines = (description or "").splitlines()
+    title_lines = (title or "").splitlines()
+
+    for lines in (description_lines, title_lines):
+        result = _search_barrio_lines(lines, BARRIO_STRICT_PATTERNS)
+        if result:
+            return result
+
+    for lines in (description_lines, title_lines):
+        result = _search_barrio_lines(lines, BARRIO_LOOSE_PATTERNS)
+        if result:
+            return result
+
+    return None
+
+
+def extract_declared_city(location_text):
+    """Primer segmento del campo de ubicacion que Facebook reporta para el
+    anuncio (ej. 'Popayan, Cauca' -> 'POPAYAN'). Es el dato mas confiable sobre
+    donde esta publicado realmente el anuncio, mas que el texto libre, que
+    frecuentemente menciona 'Pasto' solo como referencia de cercania."""
+    if not location_text:
+        return None
+    first_segment = location_text.split(",")[0]
+    return normalize_text(first_segment) or None
+
+
+def is_explicitly_out_of_city(title, description, location_text=None):
+    declared_city = extract_declared_city(location_text)
+    if declared_city:
+        if declared_city == "PASTO":
+            return False
+        if any(keyword == declared_city or keyword in declared_city for keyword in OUT_OF_CITY_KEYWORDS):
+            return True
+
     source = normalize_text(f"{title or ''}\n{description or ''}")
-    if "PASTO" in source:
-        return False
-    return any(keyword in source for keyword in OUT_OF_CITY_KEYWORDS)
+    return any(re.search(rf"\b{re.escape(keyword)}\b", source) for keyword in OUT_OF_CITY_KEYWORDS)
 
 
 def extract_city(title, description):
@@ -950,20 +1084,226 @@ def extract_city(title, description):
     return "Pasto"
 
 
-def extract_area(text):
-    source = normalize_text(text)
-    patterns = [
-        r"(?:AREA|.REA)\s+(?:DEL\s+LOTE\s+)?(?:DE\s+)?([0-9]+(?:[\.,][0-9]+)?)\s*(?:M2|MTS|METROS)",
-        r"([0-9]+(?:[\.,][0-9]+)?)\s*(?:M2|MTS|METROS\s+CUADRADOS)",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, source)
-        if match:
+# ---------------------------------------------------------------------------
+# Extraccion de areas (lote / construida / dimensiones del lote)
+# ---------------------------------------------------------------------------
+# Toda la logica vive en extract_area_details(): un unico punto de entrada
+# reutilizable. Nunca se estima ni se inventa un valor: cada campo queda en
+# None si el texto no lo dice explicitamente (o, para dimensiones, si el
+# contexto no deja claro que se trata del inmueble y no de un mueble/objeto).
+
+_LINEAR_UNIT = r"(?:MTS?|METROS?|M)"
+_AREA_UNIT = r"(?:MT2|M2|M\.2|MTS2|MTS\.?|M²|METROS\s+CUADRADOS|METROS\s*2|METROS)"
+# Subconjunto sin la palabra suelta "metros": solo unidades que son
+# inequivocamente de superficie (evita que "10 metros por 20 metros" se lea
+# como area=10 antes de intentar la extraccion de dimensiones).
+_AREA_UNIT_STRICT = r"(?:MT2|M2|M\.2|MTS2|MTS\.?|M²|METROS\s+CUADRADOS|METROS\s*2)"
+_DIM_SEP = r"(?:X|\*|POR|×)"
+_FRENTE_OPT = r"(?:(?:DE\s+)?FRENTE)?"
+_FONDO_OPT = r"(?:(?:DE\s+)?FONDO)?"
+
+# Evita que "Lote de 6 x 12" o "Terreno de 10 metros por 20 metros" se lean
+# como un area unica (6, o 10) en vez de como un par de dimensiones.
+_NEG_DIMENSION_LOOKAHEAD = rf"(?!\s*{_LINEAR_UNIT}?\s*{_DIM_SEP}\s*[0-9])"
+
+BUILT_AREA_KEYWORDS = [
+    r"AREA\s+CONSTRUIDA", r"AREA\s+PRIVADA", r"CONSTRUIDOS?", r"CONSTRUCCION", r"CONSTRUIDA",
+]
+LOT_AREA_KEYWORDS = [
+    r"AREA\s+(?:DEL\s+)?LOTE", r"AREA\s+(?:DEL\s+)?TERRENO", r"LOTE", r"TERRENO", r"SOLAR",
+]
+GENERIC_AREA_KEYWORDS = [
+    r"AREA\s+TOTAL", r"METROS\s+CUADRADOS", r"AREA", r"METROS",
+]
+
+DIMENSION_PATTERN = (
+    rf"([0-9]+(?:[.,][0-9]+)?)\s*{_LINEAR_UNIT}?\s*{_FRENTE_OPT}\s*{_DIM_SEP}\s*"
+    rf"([0-9]+(?:[.,][0-9]+)?)\s*{_LINEAR_UNIT}?\s*{_FONDO_OPT}"
+)
+FRENTE_FONDO_PATTERN = (
+    rf"\bFRENTE\s*[:\-]?\s*([0-9]+(?:[.,][0-9]+)?)\s*(?:{_LINEAR_UNIT}\s*)?FONDO\s*[:\-]?\s*"
+    rf"([0-9]+(?:[.,][0-9]+)?)\s*{_LINEAR_UNIT}?"
+)
+BARE_AREA_PATTERN = rf"\b([0-9]+(?:[.,][0-9]+)?)\s*{_AREA_UNIT_STRICT}\b"
+
+# Nunca interpretar estas medidas como area del inmueble (seccion 8 del pedido).
+AREA_EXCLUDE_KEYWORDS = {
+    "PISCINA", "CLOSET", "CLOSETS", "VENTANA", "VENTANAS", "PUERTA", "PUERTAS",
+    "GARAJE", "HABITACION", "HABITACIONES", "PANTALLA", "PANTALLAS", "TELEVISOR",
+    "TELEVISORES", "TV", "MUEBLE", "MUEBLES", "ELECTRODOMESTICO", "ELECTRODOMESTICOS",
+    "CAMA", "CAMAS",
+}
+# Palabras que confirman que "N x M" describe el lote/inmueble (HIGH).
+AREA_STRONG_KEYWORDS = {"LOTE", "TERRENO", "SOLAR"}
+# Palabras que sugieren que "N x M" son medidas del inmueble sin decir "lote" (MEDIUM).
+AREA_WEAK_KEYWORDS = {"CASA", "MEDIDAS", "DIMENSIONES", "APARTAMENTO", "APARTAESTUDIO", "INMUEBLE", "PROPIEDAD"}
+
+
+def _first_keyword_area_match(source, keyword_alternatives):
+    keyword_group = "|".join(keyword_alternatives)
+    pattern = (
+        rf"\b(?:{keyword_group})\s*[:\-]?\s*(?:DE\s+)?"
+        rf"([0-9]+(?:[.,][0-9]+)?){_NEG_DIMENSION_LOOKAHEAD}\s*{_AREA_UNIT}?"
+    )
+    match = re.search(pattern, source)
+    if not match:
+        return None
+    try:
+        value = float(match.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    if not (5 <= value <= 100_000):
+        return None
+    return value, match.start(), match.end()
+
+
+def _first_keyword_area(source, keyword_alternatives):
+    found = _first_keyword_area_match(source, keyword_alternatives)
+    return found[0] if found else None
+
+
+def _mask_span(source, start, end):
+    """Reemplaza un tramo ya usado por espacios para que un mismo numero no
+    se cuente dos veces (ej. que "Area privada: 85 m2" no termine llenando
+    built_area_m2 Y lot_area_m2 con el mismo 85)."""
+    return source[:start] + (" " * (end - start)) + source[end:]
+
+
+def _bare_area_value(source):
+    for match in re.finditer(BARE_AREA_PATTERN, source):
+        pre = source[max(0, match.start() - 40):match.start()]
+        if any(re.search(rf"\b{keyword}\b", pre) for keyword in AREA_EXCLUDE_KEYWORDS):
+            continue
+        try:
+            value = float(match.group(1).replace(",", "."))
+        except ValueError:
+            continue
+        if 5 <= value <= 100_000:
+            return value
+    return None
+
+
+def _classify_dimension_context(window_text, matched_text):
+    if any(re.search(rf"\b{keyword}\b", window_text) for keyword in AREA_EXCLUDE_KEYWORDS):
+        return None
+    if any(re.search(rf"\b{keyword}\b", window_text) for keyword in AREA_STRONG_KEYWORDS):
+        return "HIGH"
+    if "FRENTE" in matched_text or "FONDO" in matched_text:
+        return "HIGH"
+    if any(re.search(rf"\b{keyword}\b", window_text) for keyword in AREA_WEAK_KEYWORDS):
+        return "MEDIUM"
+    return None
+
+
+def _best_lot_dimensions(source):
+    best = None
+    for pattern in (FRENTE_FONDO_PATTERN, DIMENSION_PATTERN):
+        for match in re.finditer(pattern, source):
             try:
-                return float(match.group(1).replace(",", "."))
+                num1 = float(match.group(1).replace(",", "."))
+                num2 = float(match.group(2).replace(",", "."))
             except ValueError:
                 continue
-    return None
+            if not (1 <= num1 <= 500 and 1 <= num2 <= 500):
+                continue
+            window = source[max(0, match.start() - 40):match.end() + 15]
+            confidence = _classify_dimension_context(window, match.group(0))
+            if not confidence:
+                continue
+            rank = 2 if confidence == "HIGH" else 1
+            if best is None or rank > best[0]:
+                best = (rank, num1, num2, confidence)
+    if not best:
+        return None
+    _, width, length, confidence = best
+    return width, length, width * length, confidence
+
+
+def extract_area_details(text):
+    """
+    Extrae de forma robusta las areas de un inmueble (lote y/o construida) a
+    partir de texto libre de Marketplace. Nunca inventa ni estima: cada campo
+    queda en None si el texto no lo dice explicitamente. Devuelve siempre la
+    misma estructura, pensada para ser extensible (agregar una palabra clave
+    nueva no requiere tocar la logica de resolucion de conflictos).
+    """
+    result = {
+        "lot_width_m": None,
+        "lot_length_m": None,
+        "lot_area_m2": None,
+        "built_area_m2": None,
+        "area_source": "unknown",
+        "area_confidence": None,
+    }
+    source = normalize_text(text)
+    if not source:
+        return result
+
+    confidences = []
+    lot_search_source = source
+
+    # 1) Area construida explicita: unica fuente permitida para built_area_m2
+    #    (nunca se deriva de habitaciones, pisos, banos, balcones, etc.).
+    built_match = _first_keyword_area_match(source, BUILT_AREA_KEYWORDS)
+    built_source = None
+    if built_match:
+        built_value, start, end = built_match
+        result["built_area_m2"] = built_value
+        built_source = "explicit_built_area"
+        confidences.append("HIGH")
+        # Se enmascara el tramo ya usado para que el mismo numero no vuelva a
+        # contarse como area de lote (ej. "Area privada: 85 m2").
+        lot_search_source = _mask_span(source, start, end)
+
+    # 2) Area de lote explicita (con calificativo "lote"/"terreno"/"solar").
+    lot_value = _first_keyword_area(lot_search_source, LOT_AREA_KEYWORDS)
+    lot_source = "explicit_lot_area" if lot_value is not None else None
+    lot_confidence = "HIGH" if lot_value is not None else None
+
+    # 3) Dimensiones del lote (6x12, frente/fondo, etc.), solo si no hubo un
+    #    numero de area explicito.
+    if lot_value is None:
+        dims = _best_lot_dimensions(lot_search_source)
+        if dims:
+            width, length, area, confidence = dims
+            lot_value = area
+            result["lot_width_m"] = width
+            result["lot_length_m"] = length
+            lot_source = "lot_dimensions"
+            lot_confidence = confidence
+
+    # 4) Area generica con calificativo debil ("Area:", "Metros:"), como
+    #    respaldo antes de rendirse.
+    if lot_value is None:
+        generic_value = _first_keyword_area(lot_search_source, GENERIC_AREA_KEYWORDS)
+        if generic_value is not None:
+            lot_value = generic_value
+            lot_source = "explicit_lot_area"
+            lot_confidence = "HIGH"
+
+    # 5) Ultimo recurso: numero suelto seguido de una unidad de superficie
+    #    inequivoca (m2, mts2, m², metros cuadrados), sin ningun calificativo.
+    if lot_value is None:
+        bare_value = _bare_area_value(lot_search_source)
+        if bare_value is not None:
+            lot_value = bare_value
+            lot_source = "explicit_lot_area"
+            lot_confidence = "HIGH"
+
+    if lot_value is not None:
+        result["lot_area_m2"] = lot_value
+        confidences.append(lot_confidence)
+
+    sources = [item for item in (built_source, lot_source) if item]
+    if len(sources) >= 2:
+        result["area_source"] = "multiple_sources"
+    elif len(sources) == 1:
+        result["area_source"] = sources[0]
+
+    if confidences:
+        result["area_confidence"] = "MEDIUM" if "MEDIUM" in confidences else "HIGH"
+
+    return result
 
 
 def extract_count(text, patterns):
@@ -975,6 +1315,139 @@ def extract_count(text, patterns):
                 return int(match.group(1))
             except ValueError:
                 continue
+    return None
+
+
+BATHROOM_QUALIFIER_WORDS = ["SOCIAL", "PRINCIPAL", "AUXILIAR", "VISITAS", "SERVICIO"]
+
+
+def extract_banios(text):
+    count = extract_count(
+        text,
+        [
+            r"([0-9]+)\s+BA\S*OS?\s+COMPLETOS?",
+            r"([0-9]+)\s+BA\S*OS?",
+            r"BA\S*OS?\s*[:\-]?\s*([0-9]+)",
+            r"([0-9]+)\s+BATH",
+        ],
+    )
+    if count:
+        return count
+
+    source = normalize_text(text)
+    if not re.search(r"\bBA\S*OS?\b", source):
+        return None
+
+    # Solo cuenta un calificativo (social, principal, etc.) si aparece pegado a
+    # la palabra "bano/banos" en el texto; una palabra suelta en otra parte del
+    # anuncio (ej. "avenida principal") no debe sumar un bano.
+    qualifier_group = "|".join(BATHROOM_QUALIFIER_WORDS)
+    pairs = re.findall(
+        rf"BA\S*OS?\s+({qualifier_group})\b|\b({qualifier_group})\s+(?:CON\s+)?BA\S*OS?\b",
+        source,
+    )
+    qualifiers = {word for pair in pairs for word in pair if word}
+    if qualifiers:
+        return len(qualifiers)
+
+    return 1
+
+
+ORDINAL_FLOOR_WORDS = {
+    "PRIMER": 1, "PRIMERO": 1, "PRIMERA": 1,
+    "SEGUNDO": 2, "SEGUNDA": 2,
+    "TERCER": 3, "TERCERO": 3, "TERCERA": 3,
+    "CUARTO": 4, "CUARTA": 4,
+    "QUINTO": 5, "QUINTA": 5,
+    "SEXTO": 6, "SEXTA": 6,
+}
+
+
+def extract_pisos(text):
+    count = extract_count(
+        text,
+        [
+            r"([0-9]+)\s+PISOS?",
+            r"PISO\s+([0-9]+)",
+            r"([0-9]+)\s*(?:ER|DO|RO|TO|VO)?\s*PISO",
+            r"NIVEL\s+([0-9]+)",
+            r"([0-9]+)\s+NIVELES?",
+        ],
+    )
+    if count:
+        return count
+
+    source = normalize_text(text)
+    match = re.search(
+        r"\b(PRIMER|PRIMERO|PRIMERA|SEGUNDO|SEGUNDA|TERCER|TERCERO|TERCERA|"
+        r"CUARTO|CUARTA|QUINTO|QUINTA|SEXTO|SEXTA)\s+(?:PISO|NIVEL)\b",
+        source,
+    )
+    if match:
+        return ORDINAL_FLOOR_WORDS.get(match.group(1))
+    return None
+
+
+PARKING_WORD_TO_NUMBER = {
+    "UN": 1, "UNO": 1, "DOS": 2, "TRES": 3, "CUATRO": 4,
+    "DOBLE": 2, "TRIPLE": 3,
+}
+
+
+def extract_parqueaderos(text):
+    source = normalize_text(text)
+    # Un "parqueadero comunal" es un cupo compartido del conjunto, no un cupo
+    # privado del inmueble: no debe contarse como parqueadero propio.
+    count = extract_count(
+        source,
+        [
+            r"([0-9]+)\s+PARQUEADEROS?(?!\s+COMUNAL)",
+            r"([0-9]+)\s+GARAJES?",
+            r"([0-9]+)\s+COCHERAS?",
+            r"([0-9]+)\s+PARKING",
+            r"PARQUEADEROS?\s*[:\-]?\s*([0-9]+)",
+            r"GARAJES?\s*[:\-]?\s*([0-9]+)",
+        ],
+    )
+    if count:
+        return count
+
+    match = re.search(
+        r"\b(UN|UNO|DOS|TRES|CUATRO|DOBLE|TRIPLE)\s+(?:PARQUEADEROS?(?!\s+COMUNAL)|GARAJES?|COCHERAS?|PARKING)\b",
+        source,
+    )
+    if match:
+        return PARKING_WORD_TO_NUMBER.get(match.group(1))
+
+    match = re.search(
+        r"\b(?:PARQUEADEROS?(?!\s+COMUNAL)|GARAJES?|COCHERAS?|PARKING)\s+(DOBLE|TRIPLE)\b",
+        source,
+    )
+    if match:
+        return PARKING_WORD_TO_NUMBER.get(match.group(1))
+
+    non_communal_source = re.sub(r"\bPARQUEADEROS?\s+COMUNAL(?:ES)?\b", "", source)
+    if re.search(r"\b(GARAJE|PARQUEADERO|PARQUEADEROS|COCHERA|PARKING)\b", non_communal_source):
+        return 1
+    return None
+
+
+def extract_administracion(text):
+    source = normalize_text(text)
+    match = re.search(
+        r"\bADM(?:INISTRACI\S*)?\.?\s*[:\-]?\s*\$?\s*"
+        r"([0-9]{1,3}(?:[\.,][0-9]{3})*|[0-9]+)\s*(MIL)?",
+        source,
+    )
+    if not match:
+        return None
+    value = parse_money_digits(match.group(1))
+    if not value:
+        return None
+    if match.group(2):
+        value *= 1000
+    if 0 < value < 10_000_000:
+        return value
     return None
 
 
@@ -1016,6 +1489,33 @@ def extract_seller(page, body_text):
 
 def extract_image_urls(page, listing_url=None):
     current_item_id = extract_marketplace_id(listing_url)
+
+    # La tira de miniaturas del visor puede cargar las fotos con lazy loading
+    # al hacer scroll horizontal. Se fuerza ese scroll antes de leer el DOM
+    # para que todas las miniaturas terminen con su <img src> resuelto.
+    try:
+        page.evaluate(
+            """
+            () => {
+                const thumbs = Array.from(
+                    document.querySelectorAll('[aria-label^="Miniatura"],[aria-label^="Thumbnail"]')
+                )
+                if (!thumbs.length) return
+                let container = thumbs[0].parentElement
+                for (let i = 0; i < 6 && container; i++) {
+                    if (container.scrollWidth > container.clientWidth) break
+                    container = container.parentElement
+                }
+                if (container && container.scrollWidth > container.clientWidth) {
+                    container.scrollLeft = container.scrollWidth
+                }
+            }
+            """
+        )
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+
     try:
         images = page.evaluate(
             """
@@ -1024,7 +1524,54 @@ def extract_image_urls(page, listing_url=None):
                     const match = String(href || '').match(/\\/marketplace\\/item\\/(\\d+)/)
                     return match ? match[1] : null
                 }
-                const relatedMarkers = [
+
+                // Estrategia principal: cada foto propia del anuncio esta marcada
+                // con aria-label="Miniatura N" (o "Thumbnail N" en ingles) dentro
+                // de la tira de miniaturas del visor. Publicidad, patrocinados,
+                // sugeridos, perfil del vendedor y publicaciones relacionadas
+                // nunca aparecen dentro de esa tira, asi que no requieren filtros
+                // heuristicos adicionales.
+                const thumbs = Array.from(
+                    document.querySelectorAll('[aria-label^="Miniatura"],[aria-label^="Thumbnail"]')
+                )
+                if (thumbs.length) {
+                    const seenSrc = new Set()
+                    const ordered = thumbs
+                        .map((thumb) => {
+                            const label = thumb.getAttribute('aria-label') || ''
+                            const indexMatch = label.match(/(\\d+)\\s*$/)
+                            const img = thumb.querySelector('img')
+                            return {
+                                index: indexMatch ? parseInt(indexMatch[1], 10) : 0,
+                                src: img ? (img.currentSrc || img.src || '') : '',
+                                width: img ? (img.naturalWidth || img.width || 0) : 0,
+                                height: img ? (img.naturalHeight || img.height || 0) : 0,
+                            }
+                        })
+                        .filter((item) => item.src && !seenSrc.has(item.src) && seenSrc.add(item.src))
+                        .sort((a, b) => a.index - b.index)
+                    if (ordered.length) {
+                        return ordered.map((item) => ({
+                            src: item.src,
+                            width: item.width,
+                            height: item.height,
+                            alt: '',
+                            top: 0,
+                            area: 0,
+                            linkedItemId: currentItemId,
+                            isOtherListing: false,
+                            isProfileImage: false,
+                            isSponsored: false,
+                            isBelowExcluded: false,
+                            trusted: true,
+                        }))
+                    }
+                }
+
+                // Respaldo: si el visor no expone miniaturas identificables (ej.
+                // una publicacion con una sola foto), se reutiliza el escaneo
+                // heuristico anterior por posicion y marcadores de texto.
+                const excludedMarkers = [
                     'PUBLICACIONES RELACIONADAS',
                     'RELATED LISTINGS',
                     'MAS PUBLICACIONES DEL VENDEDOR',
@@ -1032,15 +1579,26 @@ def extract_image_urls(page, listing_url=None):
                     'MORE FROM THIS SELLER',
                     'MAS COMO ESTE',
                     'MÁS COMO ESTE',
-                    'MORE LIKE THIS'
+                    'MORE LIKE THIS',
+                    'PATROCINADO',
+                    'SPONSORED',
+                    'PUBLICIDAD',
+                    'ANUNCIO',
+                    'PRODUCTOS SUGERIDOS',
+                    'ARTICULOS SUGERIDOS',
+                    'ARTÍCULOS SUGERIDOS',
+                    'SUGGESTED FOR YOU',
+                    'RECOMENDADO PARA TI',
+                    'RECOMENDADOS PARA TI',
+                    'RECOMENDADOS'
                 ]
-                let relatedTop = Number.POSITIVE_INFINITY
+                let excludedTop = Number.POSITIVE_INFINITY
                 for (const element of document.querySelectorAll('span,h2,h3,div[role="heading"]')) {
                     const text = (element.innerText || element.textContent || '').trim().toUpperCase()
-                    if (!text || !relatedMarkers.some((marker) => text.includes(marker))) continue
+                    if (!text || !excludedMarkers.some((marker) => text.includes(marker))) continue
                     const rect = element.getBoundingClientRect()
                     if (rect.width > 0 && rect.height > 0) {
-                        relatedTop = Math.min(relatedTop, rect.top + window.scrollY)
+                        excludedTop = Math.min(excludedTop, rect.top + window.scrollY)
                     }
                 }
 
@@ -1048,6 +1606,9 @@ def extract_image_urls(page, listing_url=None):
                     const rect = img.getBoundingClientRect()
                     const itemAnchor = img.closest('a[href*="/marketplace/item/"]')
                     const profileAnchor = img.closest('a[href*="/marketplace/profile/"],a[href*="/profile.php"],a[href*="/people/"]')
+                    const sponsoredAncestor = img.closest(
+                        '[aria-label*="Sponsored" i],[aria-label*="Patrocinado" i],[aria-label*="Suggested" i],[aria-label*="Sugerido" i]'
+                    )
                     const linkedItemId = itemAnchor ? itemIdFromHref(itemAnchor.href || itemAnchor.getAttribute('href')) : null
                     const top = rect.top + window.scrollY
                     return {
@@ -1060,7 +1621,8 @@ def extract_image_urls(page, listing_url=None):
                         linkedItemId,
                         isOtherListing: Boolean(currentItemId && linkedItemId && linkedItemId !== currentItemId),
                         isProfileImage: Boolean(profileAnchor),
-                        isBelowRelated: Number.isFinite(relatedTop) && top > relatedTop
+                        isSponsored: Boolean(sponsoredAncestor),
+                        isBelowExcluded: Number.isFinite(excludedTop) && top > excludedTop
                     }
                 })
             }
@@ -1076,15 +1638,26 @@ def extract_image_urls(page, listing_url=None):
         src = image.get("src") or ""
         width = int(image.get("width") or 0)
         height = int(image.get("height") or 0)
+        # Las imagenes que vienen de la tira de miniaturas ya estan garantizadas
+        # a pertenecer al anuncio actual (ver estrategia principal arriba), asi
+        # que no pasan por los filtros heuristicos de posicion/tamano pensados
+        # para el escaneo de respaldo (donde naturalWidth puede venir en 0 si la
+        # miniatura aun no termino de decodificar).
+        trusted = bool(image.get("trusted"))
         if not src or src in seen:
             continue
-        if image.get("isOtherListing") or image.get("isProfileImage") or image.get("isBelowRelated"):
+        if not trusted and (
+            image.get("isOtherListing")
+            or image.get("isProfileImage")
+            or image.get("isSponsored")
+            or image.get("isBelowExcluded")
+        ):
             continue
         if "static.xx.fbcdn.net" in src or "emoji.php" in src or "rsrc.php" in src:
             continue
         if "fbcdn.net" not in src and "scontent" not in src:
             continue
-        if width < 160 or height < 160:
+        if not trusted and (width < 160 or height < 160):
             continue
         seen.add(src)
         image_urls.append(src)
@@ -1132,21 +1705,34 @@ def extract_publication_data(page, link):
         print(f"[SKIP] No es venta pura: {title} ({sale_reason})")
         return None, html, [], sale_reason
 
-    price = extract_price(full_text) or embedded.get("price_amount")
+    # Prioridad de precio: 1) JSON estructurado de Marketplace (mas confiable),
+    # 2) precio visible/formateado del propio JSON, 3) texto libre (descripcion/
+    # titulo) como ultimo recurso. Antes se usaba primero el texto libre, lo que
+    # permitia que un numero de telefono ganara sobre el precio real.
+    price = (
+        _sane_price(embedded.get("price_amount"))
+        or _sane_price(parse_money_digits(embedded.get("price_text")))
+        or extract_price(full_text)
+    )
     if not price:
         print(f"[SKIP] Venta sin precio real: {title}")
         return None, html, [], "sin_precio"
 
     tipo_inmueble = extract_property_type(title, full_text)
 
-    if is_explicitly_out_of_city(title, full_text):
-        print(f"[SKIP] Publicacion parece estar fuera de Pasto: {title}")
-        return None, html, [], "fuera_de_pasto"
-
     item_id = extract_marketplace_id(link)
     barrio = extract_barrio(title, full_text)
     ciudad = extract_city(title, full_text)
     location = embedded.get("location") or extract_location(listing_text) or extract_location(body_text)
+
+    # La validacion de ciudad usa la ubicacion real declarada por Marketplace
+    # (location) como fuente principal, no solo si aparece la palabra "Pasto"
+    # en el texto libre (el vendedor puede mencionar "Pasto" como referencia de
+    # cercania aunque el inmueble este en otro municipio).
+    if is_explicitly_out_of_city(title, full_text, location_text=location):
+        print(f"[SKIP] Publicacion parece estar fuera de Pasto: {title}")
+        return None, html, [], "fuera_de_pasto"
+
     location_result = resolve_pasto_location(
         barrio, title=title, description=full_text, address=location, city=ciudad
     )
@@ -1156,6 +1742,7 @@ def extract_publication_data(page, link):
     barrio = location_result.value if location_result.accepted else None
     image_urls = extract_image_urls(page, link)
     seller = extract_seller(page, body_text)
+    area_details = extract_area_details(full_text)
 
     notes = {
         "titulo_facebook": title,
@@ -1165,6 +1752,7 @@ def extract_publication_data(page, link):
         "min_sale_price": MIN_SALE_PRICE,
         "contenido_filtrado": listing_text[:3000],
         "normalizacion_ubicacion": location_diagnostic(location_result),
+        "area": area_details,
     }
     data = {
         "codigo_externo": f"FB {item_id}" if item_id else None,
@@ -1181,17 +1769,27 @@ def extract_publication_data(page, link):
         "estrato": extract_count(full_text, [r"ESTRATO\s+([0-9])"]),
         "descripcion": description,
         "precio": price,
-        "m2": extract_area(full_text),
-        "m2_construido": None,
+        "m2": area_details["lot_area_m2"] if area_details["lot_area_m2"] is not None else area_details["built_area_m2"],
+        "m2_construido": area_details["built_area_m2"],
         "antiguedad": None,
-        "pisos": extract_count(full_text, [r"([0-9]+)\s+PISOS?", r"PISO\s+([0-9]+)"]),
+        "pisos": extract_pisos(full_text),
         "habitaciones": extract_count(
             full_text,
-            [r"([0-9]+)\s+HABITACI\S*", r"([0-9]+)\s+ALCOBAS?", r"([0-9]+)\s+CUARTOS?"],
+            [
+                r"([0-9]+)\s+HABITACI\S*",
+                r"([0-9]+)\s+ALCOBAS?",
+                # \b(?!\s+DE\s+BA) evita contar "2 cuartos de bano" como habitaciones
+                # (el \b es necesario para que la S opcional no deje "escapar" al lookahead).
+                r"([0-9]+)\s+CUARTOS?\b(?!\s+DE\s+BA)",
+                r"([0-9]+)\s+DORMITORIOS?",
+                r"HABITACI\S*\s*[:\-]?\s*([0-9]+)",
+                r"ALCOBAS?\s*[:\-]?\s*([0-9]+)",
+                r"DORMITORIOS?\s*[:\-]?\s*([0-9]+)",
+            ],
         ),
-        "banios": extract_count(full_text, [r"([0-9]+)\s+BA\S*OS?", r"([0-9]+)\s+BATH"]),
-        "parqueadero": 1 if re.search(r"\b(GARAJE|PARQUEADERO|PARKING)\b", normalize_text(full_text)) else None,
-        "administracion": None,
+        "banios": extract_banios(full_text),
+        "parqueadero": extract_parqueaderos(full_text),
+        "administracion": extract_administracion(full_text),
     }
     return data, html, image_urls, None
 
