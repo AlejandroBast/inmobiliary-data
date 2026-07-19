@@ -3,6 +3,7 @@ import {
   getCoincidenciasPublicaciones,
   getFuentes,
   getPublicaciones,
+  getTiposInmueble,
   type PublicacionFilters,
 } from "@/app/actions/publicaciones"
 import { AppShell } from "@/components/app-shell"
@@ -71,10 +72,11 @@ export default async function Page({
     duplicados: firstValue(params.duplicados),
   }
 
-  const [publicaciones, fuentes, barriosData] = await Promise.all([
+  const [publicaciones, fuentes, barriosData, tiposInmueble] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
+    getTiposInmueble(),
   ])
   const coincidencias = await getCoincidenciasPublicaciones(publicaciones.map((publicacion) => publicacion.id))
   const publicacionesConCoincidencias = publicaciones.map((publicacion) => ({
@@ -113,6 +115,7 @@ export default async function Page({
           <PublicacionesFiltrosPro
             fuentes={fuentes}
             barrios={barriosData.barrios}
+            tiposInmueble={tiposInmueble}
             hasSinBarrio={barriosData.hasSinBarrio}
             initialValues={{
               id: filtros.id ?? undefined,
@@ -138,6 +141,7 @@ export default async function Page({
             publicaciones={publicacionesConCoincidencias}
             fuentes={fuentes}
             barrios={barriosData.barrios}
+            tiposInmueble={tiposInmueble}
             hasSinBarrio={barriosData.hasSinBarrio}
             hasActiveFilters={filtrosActivos}
           />
