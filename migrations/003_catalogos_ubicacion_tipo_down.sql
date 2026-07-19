@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS tipos_inmueble;
+DROP TABLE IF EXISTS barrios;
