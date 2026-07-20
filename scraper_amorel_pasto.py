@@ -27,6 +27,7 @@ except ImportError:
 from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from net_retry import with_retry
 from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
@@ -151,11 +152,16 @@ def safe_url(url):
 
 
 def fetch_url(url, timeout=45):
-    request = Request(safe_url(url), headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout) as response:
-        content = response.read()
-        charset = response.headers.get_content_charset() or "utf-8"
-        final_url = response.geturl()
+    def fetch():
+        request = Request(safe_url(url), headers={"User-Agent": USER_AGENT})
+        with urlopen(request, timeout=timeout) as response:
+            return (
+                response.read(),
+                response.headers.get_content_charset() or "utf-8",
+                response.geturl(),
+            )
+
+    content, charset, final_url = with_retry(fetch, f"Abrir {url}")
     text = content.decode(charset, "replace")
     if "\ufffd" in text:
         fallback = content.decode("cp1252", "replace")
@@ -1192,9 +1198,12 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     filename = f"amorel_{sanitize_filename(codigo_archivo)}_{index:02d}.jpg"
     path = img_dir / filename
     try:
-        request = Request(safe_url(image_url), headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=IMAGE_DOWNLOAD_TIMEOUT) as response:
-            content = response.read()
+        def fetch_image():
+            request = Request(safe_url(image_url), headers={"User-Agent": USER_AGENT})
+            with urlopen(request, timeout=IMAGE_DOWNLOAD_TIMEOUT) as response:
+                return response.read()
+
+        content = with_retry(fetch_image, f"Descargar imagen {image_url}")
         if not content:
             return None
         with open(path, "wb") as file:
