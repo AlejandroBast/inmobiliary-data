@@ -1,4 +1,3 @@
-import hashlib
 import html as html_module
 import json
 import os
@@ -29,10 +28,17 @@ except ImportError:
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
-from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
+import scraper_common as common
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from net_retry import with_retry
+from scraper_common import (
+    clean_text,
+    get_lines,
+    insert_evidencia,
+    publicacion_ya_existe,
+    sanitize_filename,
+)
 from scraper_audit import ScraperAudit
 
 
@@ -109,6 +115,28 @@ SESSION_COOKIES_PATH = Path(
 )
 EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_publication_evidence_dirs(publicacion_id):
+    html_dir, img_dir, _ = common.get_publication_evidence_dirs(
+        publicacion_id, EVIDENCE_DIR, con_screenshots=False
+    )
+    return html_dir, img_dir
+
+
+def get_connection():
+    return common.get_connection(DB_DEFAULT_PORT)
+
+
+def get_or_create_fuente_id(connection):
+    return common.get_or_create_fuente_id(
+        connection,
+        SOURCE_NAME,
+        "https://www.facebook.com/marketplace/",
+        "marketplace",
+        "Scraper de inmuebles en venta en Pasto desde Facebook Marketplace",
+    )
+
 LOG_DIR = Path("logs")
 
 NEGATIVE_OPERATION_PATTERNS = [
@@ -284,28 +312,11 @@ def dedupe_urls(urls):
     return deduped
 
 
-def clean_text(value):
-    if value is None:
-        return None
-    value = html_module.unescape(str(value))
-    value = re.sub(r"\s+", " ", value).strip()
-    return value if value else None
-
-
 def normalize_text(value):
     value = clean_text(value) or ""
     value = unicodedata.normalize("NFD", value)
     value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
     return value.upper()
-
-
-def get_lines(text):
-    lines = []
-    for raw_line in (text or "").splitlines():
-        line = clean_text(raw_line)
-        if line:
-            lines.append(line)
-    return lines
 
 
 def get_search_phrases():
@@ -1869,38 +1880,6 @@ def print_db_connection_help(error):
     print("[ERROR] - Para probar sin guardar: $env:FACEBOOK_DRY_RUN=\"true\"")
 
 
-def get_connection():
-    if mysql is None:
-        raise RuntimeError("mysql-connector-python no esta instalado.")
-    return mysql.connector.connect(**get_db_config(DB_DEFAULT_PORT))
-
-
-def get_or_create_fuente_id(connection):
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-        """,
-        (
-            SOURCE_NAME,
-            "https://www.facebook.com/marketplace/",
-            "marketplace",
-            "Scraper de inmuebles en venta en Pasto desde Facebook Marketplace",
-        ),
-    )
-    connection.commit()
-    fuente_id = cursor.lastrowid
-    cursor.close()
-    return fuente_id
-
-
 def buscar_fuente_id(connection):
     """Busca el id de la fuente sin crearla. Para DRY_RUN, que no debe escribir."""
     cursor = connection.cursor()
@@ -1942,34 +1921,6 @@ def ya_esta_en_bd(connection, link, fuente_id):
         return False
 
 
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,),
-        )
-    result = cursor.fetchone()
-    cursor.close()
-    return result[0] if result else None
-
-
 def insert_publicacion(connection, data):
     cursor = connection.cursor()
     cursor.execute(
@@ -1995,61 +1946,6 @@ def insert_publicacion(connection, data):
     publicacion_id = cursor.lastrowid
     cursor.close()
     return publicacion_id
-
-
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-    cursor = connection.cursor()
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo),
-    )
-    if cursor.fetchone():
-        cursor.close()
-        return
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion
-        (publicacion_id, tipo, ruta_archivo, url_original, hash_archivo)
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original, file_hash(ruta_archivo)),
-    )
-    connection.commit()
-    cursor.close()
-
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    for folder in [html_dir, img_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-    return html_dir, img_dir
-
-
-def sanitize_filename(value):
-    value = clean_text(value) or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", value)
-    return value[:120]
-
-
-def file_hash(path):
-    if not path or not Path(path).exists():
-        return None
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            sha256.update(chunk)
-    return sha256.hexdigest()
 
 
 def save_html(html, codigo_archivo, publicacion_id):
