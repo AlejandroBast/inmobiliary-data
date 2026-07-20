@@ -19,3 +19,9 @@ graphify-out
 .pytest_cache/
 build/
 dist/
+
+# Artefactos del front
+front/.next/
+front/node_modules/
+front/*.log
+front/tsconfig.tsbuildinfo
