@@ -24,6 +24,7 @@ except ImportError:
     def load_dotenv():
         return None
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from ph_detector import detect_ph
@@ -39,14 +40,6 @@ SEARCH_URL = os.getenv(
     "https://amorelpasto.com/clasificados/web/app.php/resultados/Finca%20Raiz",
 )
 BASE_URL = "https://amorelpasto.com"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
 
 # 0 = todas las paginas detectadas por subcategoria.
 MAX_PAGES = int(os.getenv("AMOREL_MAX_PAGES", "0"))
@@ -1024,7 +1017,7 @@ def extract_publication_data(url, tipo_hint=None):
 def get_connection():
     if mysql is None:
         raise RuntimeError("mysql-connector-python no esta instalado.")
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**get_db_config())
 
 
 def get_or_create_fuente_id(connection):

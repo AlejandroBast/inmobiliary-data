@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from ph_detector import detect_ph
@@ -32,14 +33,6 @@ SEARCH_URL = os.getenv(
     "https://www.fincaraiz.com.co/venta/pasto/narino"
 )
 BASE_URL = "https://www.fincaraiz.com.co"
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas por el contador del sitio.
@@ -735,7 +728,7 @@ def extract_coordinates_from_source(html, text):
 # ==========================================================
 
 def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**get_db_config())
 
 
 def get_or_create_fuente_id(connection):

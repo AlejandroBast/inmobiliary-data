@@ -6,18 +6,12 @@ import os
 import mysql.connector
 from dotenv import load_dotenv
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 
 
 load_dotenv()
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
 BATCH_SIZE = int(os.getenv("DUPLICATE_BACKFILL_BATCH_SIZE", "100"))
 
 
@@ -54,7 +48,7 @@ def main():
         help="limpia resultados automaticos anteriores antes de recalcular",
     )
     args = parser.parse_args()
-    connection = mysql.connector.connect(**DB_CONFIG)
+    connection = mysql.connector.connect(**get_db_config())
     try:
         if args.rebuild:
             reset_automatic_results(connection)

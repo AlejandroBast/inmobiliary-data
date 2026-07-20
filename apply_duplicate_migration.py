@@ -1,23 +1,18 @@
 """Aplica de forma idempotente las tablas del detector de duplicados."""
 
-import os
 from pathlib import Path
 
 import mysql.connector
 from dotenv import load_dotenv
+
+from db_config import get_db_config
 
 
 load_dotenv()
 
 
 def main():
-    connection = mysql.connector.connect(
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        user=os.getenv("DB_USER", "root"),
-        password=os.getenv("DB_PASSWORD", "boludo123"),
-        database=os.getenv("DB_NAME", "db_inmobiliary_data"),
-    )
+    connection = mysql.connector.connect(**get_db_config())
     cursor = connection.cursor()
     try:
         migration = Path(__file__).with_name("migrations") / "001_duplicate_detection.sql"

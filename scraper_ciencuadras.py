@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from ph_detector import detect_ph
@@ -39,14 +40,6 @@ BASE_URL = "https://www.ciencuadras.com"
 # toda la pagina: hay que escopar siempre a este selector.
 PAGINATION_CONTAINER_SELECTOR = "ul.pagination.desktop"
 # --- FIN CAMBIO ---
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas.
@@ -492,7 +485,7 @@ def extract_administracion(text):
 # ==========================================================
 
 def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**get_db_config())
 
 
 def get_or_create_fuente_id(connection):
