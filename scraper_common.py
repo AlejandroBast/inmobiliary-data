@@ -60,17 +60,39 @@ def parse_int(value):
 
 
 def parse_decimal(value):
-    if not value:
+    """Convierte un numero en formato colombiano a float.
+
+    El punto puede ser separador de miles y la coma decimal:
+        100 m2     -> 100.0
+        118.65 m2  -> 118.65
+        1.104 m2   -> 1104.0    (mil ciento cuatro, no uno coma uno)
+        1.234,56   -> 1234.56
+
+    Ciencuadras usaba una version que solo cambiaba coma por punto, y con eso
+    un lote de 1.104 m2 quedaba guardado como 1.1 m2.
+    """
+    if value is None:
         return None
 
-    value = str(value).replace(",", ".")
-    match = re.search(r"(\d+(?:\.\d+)?)", value)
+    match = re.search(r"(\d+(?:[\.,]\d+)*)", str(value))
 
     if not match:
         return None
 
+    number = match.group(1)
+
+    if "," in number and "." in number:
+        number = number.replace(".", "").replace(",", ".")
+    elif "," in number:
+        number = number.replace(",", ".")
+    elif "." in number:
+        parts = number.split(".")
+        # 1.104 son mil ciento cuatro; 118.65 son ciento dieciocho con 65.
+        if len(parts) == 2 and len(parts[1]) == 3 and len(parts[0]) <= 2:
+            number = "".join(parts)
+
     try:
-        return float(match.group(1))
+        return float(number)
     except ValueError:
         return None
 

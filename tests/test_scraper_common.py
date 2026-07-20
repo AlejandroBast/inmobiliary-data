@@ -37,6 +37,15 @@ def test_parse_decimal_acepta_coma_decimal():
     assert common.parse_decimal("118,65 m2") == 118.65
     assert common.parse_decimal("100 m2") == 100.0
     assert common.parse_decimal("sin area") is None
+    assert common.parse_decimal(None) is None
+
+
+def test_parse_decimal_trata_el_punto_como_separador_de_miles():
+    # Ciencuadras devolvia 1.104 aca: un lote de 1104 m2 guardado como 1.1 m2.
+    assert common.parse_decimal("1.104 m2") == 1104.0
+    assert common.parse_decimal("1.234,56") == 1234.56
+    # Pero 118.65 sigue siendo decimal, no ciento dieciocho mil.
+    assert common.parse_decimal("118.65 m2") == 118.65
 
 
 def test_get_lines_descarta_vacias():
