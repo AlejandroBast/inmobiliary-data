@@ -15,6 +15,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
 
@@ -683,6 +684,7 @@ def extract_publication_data(page, url, fuente_id):
 
     descripcion = regex_value(source, r'"comment"\s*:\s*"((?:\\.|[^"])*)"')
     descripcion = decode_json_text(descripcion)
+    ph = detect_ph(title, descripcion)
     location_result = resolve_pasto_location(
         barrio, title=title, description=descripcion, address=direccion, city=ciudad
     )
@@ -715,7 +717,7 @@ def extract_publication_data(page, url, fuente_id):
         "ciudad": ciudad,
         "barrio": barrio,
         "tipo_inmueble": tipo_inmueble,
-        "ph": None,
+        "ph": ph,
         "estrato": estrato,
         "descripcion": descripcion,
         "precio": precio,
