@@ -33,6 +33,7 @@ import {
   type CoincidenciaPublicacion,
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
+import { ExpandableText } from "@/components/expandable-text"
 import { PublicacionForm } from "@/components/publicacion-form"
 import { PublicacionesColumnFilters } from "@/components/publicaciones-column-filters"
 import { formatCOP, formatDate, formatNumber } from "@/lib/format"
@@ -177,7 +178,9 @@ function barrioLabel(value?: string | null) {
 }
 
 function phLabel(value?: string | null) {
-  return value?.trim() || "Sin PH"
+  const trimmed = value?.trim()
+  if (!trimmed) return "Sin PH"
+  return trimmed === "Si" ? "Sí" : trimmed
 }
 
 function shortNote(value?: string | null) {
@@ -536,21 +539,21 @@ export function PublicacionesManagerPro({
               Pagina {safePage} de {totalPages} · {publicaciones.length} registros
             </Badge>
           </div>
-          <div className="overflow-x-auto">
-            <Table>
+          <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="bg-slate-100/80 dark:bg-zinc-900">
-                  <TableHead>ID</TableHead>
-                  <TableHead>Publicacion</TableHead>
-                  <TableHead>Barrio</TableHead>
-                  <TableHead>Fuente</TableHead>
-                  <TableHead className="text-right">Precio</TableHead>
-                  <TableHead className="text-right">Area</TableHead>
-                  <TableHead className="text-right">$/m2</TableHead>
-                  <TableHead>Caracteristicas</TableHead>
-                  <TableHead>Nota</TableHead>
-                  <TableHead>Captura</TableHead>
-                  <TableHead className="text-right">Acciones</TableHead>
+                  <TableHead className="w-14">ID</TableHead>
+                  <TableHead className="w-[160px]">Publicacion</TableHead>
+                  <TableHead className="w-[110px]">Barrio</TableHead>
+                  <TableHead className="w-[90px]">Fuente</TableHead>
+                  <TableHead className="w-[130px] text-right">Precio</TableHead>
+                  <TableHead className="w-[80px] text-right">Area</TableHead>
+                  <TableHead className="w-[90px] text-right">$/m2</TableHead>
+                  <TableHead className="w-[110px]">Caracteristicas</TableHead>
+                  <TableHead className="w-[180px]">PH</TableHead>
+                  <TableHead className="w-[100px]">Nota</TableHead>
+                  <TableHead className="w-[100px]">Captura</TableHead>
+                  <TableHead className="w-[180px] text-right">Acciones</TableHead>
                 </TableRow>
                 <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} tiposInmueble={tiposInmueble} hasSinBarrio={hasSinBarrio} />
               </TableHeader>
@@ -609,7 +612,10 @@ export function PublicacionesManagerPro({
                         <Badge variant="outline" className="gap-1 border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"><Car className="size-3" />{p.parqueadero ?? "-"}</Badge>
                       </div>
                     </TableCell>
-                    <TableCell className="max-w-56 text-sm text-muted-foreground">{shortNote(p.notas)}</TableCell>
+                    <TableCell className="text-sm">
+                      <ExpandableText text={phLabel(p.ph)} maxWidth={160} truncateLength={30} />
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{shortNote(p.notas)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <CalendarClock className="size-3.5" />
@@ -649,7 +655,6 @@ export function PublicacionesManagerPro({
                 ))}
               </TableBody>
             </Table>
-          </div>
           <div className="flex flex-col gap-3 border-t px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span>Mostrar</span>
