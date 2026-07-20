@@ -14,11 +14,11 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from duplicate_detector import detect_duplicates_safely
-import scraper_common as common
-from location_normalizer import location_diagnostic, resolve_pasto_location
-from net_retry import with_retry
-from scraper_common import (
+from inmobiliary.detectors.duplicates import detect_duplicates_safely
+import inmobiliary.common as common
+from inmobiliary.detectors.location import location_diagnostic, resolve_pasto_location
+from inmobiliary.net import with_retry
+from inmobiliary.common import (
     clean_text,
     get_connection,
     get_lines,
@@ -28,8 +28,8 @@ from scraper_common import (
     publicacion_ya_existe,
     sanitize_filename,
 )
-from ph_detector import detect_ph
-from scraper_audit import ScraperAudit
+from inmobiliary.detectors.ph import detect_ph
+from inmobiliary.audit import ScraperAudit
 
 
 # ==========================================================

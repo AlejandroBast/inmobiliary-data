@@ -7,10 +7,10 @@ from pathlib import Path
 import mysql.connector
 from dotenv import load_dotenv
 
-from location_normalizer import location_diagnostic, normalize_text, resolve_pasto_location
+from inmobiliary.detectors.location import location_diagnostic, normalize_text, resolve_pasto_location
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 AUDITED_SAFE_IDS = {
     5, 13, 20, 23, 29, 35, 38, 39, 53, 57, 70, 76, 82, 86, 94, 103, 106,
     135, 140, 146, 154, 163, 167, 168, 177, 179, 183, 185, 193, 195, 198,

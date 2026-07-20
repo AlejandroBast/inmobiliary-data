@@ -4,11 +4,11 @@ Son las funciones que se rompen cuando el portal cambia su HTML, y hasta ahora
 no tenian ninguna red de seguridad. No necesitan Playwright ni base de datos.
 """
 
-import scraper_amorel_pasto as amorel
-import scraper_ciencuadras as ciencuadras
-import scraper_facebook_marketplace as facebook
-import scraper_fincaraiz_pasto as fincaraiz
-import scraper_metrocuadrado_pasto as metrocuadrado
+import inmobiliary.scrapers.amorel as amorel
+import inmobiliary.scrapers.ciencuadras as ciencuadras
+import inmobiliary.scrapers.facebook as facebook
+import inmobiliary.scrapers.fincaraiz as fincaraiz
+import inmobiliary.scrapers.metrocuadrado as metrocuadrado
 
 
 # ==========================================================

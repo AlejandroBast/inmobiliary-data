@@ -6,8 +6,8 @@ import os
 import mysql.connector
 from dotenv import load_dotenv
 
-from db_config import get_db_config
-from duplicate_detector import detect_duplicates_safely
+from inmobiliary.config import get_db_config
+from inmobiliary.detectors.duplicates import detect_duplicates_safely
 
 
 load_dotenv()

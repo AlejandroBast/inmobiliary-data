@@ -19,7 +19,7 @@ try:
 except ImportError:
     mysql = None
 
-from db_config import get_db_config
+from inmobiliary.config import get_db_config
 
 
 # ==========================================================

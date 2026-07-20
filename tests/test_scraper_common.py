@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import scraper_common as common
+import inmobiliary.common as common
 
 
 # ==========================================================
