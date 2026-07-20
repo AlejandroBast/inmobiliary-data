@@ -3,7 +3,6 @@ import re
 import json
 import time
 import math
-import hashlib
 import requests
 import mysql.connector
 
@@ -14,10 +13,21 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
+import scraper_common as common
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from net_retry import with_retry
+from scraper_common import (
+    clean_text,
+    get_connection,
+    get_lines,
+    insert_evidencia,
+    only_digits,
+    parse_decimal,
+    parse_int,
+    publicacion_ya_existe,
+    sanitize_filename,
+)
 from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
@@ -65,74 +75,24 @@ EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_publication_evidence_dirs(publicacion_id):
+    return common.get_publication_evidence_dirs(publicacion_id, EVIDENCE_DIR)
+
+
+def get_or_create_fuente_id(connection):
+    return common.get_or_create_fuente_id(
+        connection,
+        "Ciencuadras",
+        BASE_URL,
+        "portal",
+        "Scraper de inmuebles en venta en Pasto desde Ciencuadras",
+    )
+
+
+
 # ==========================================================
 # UTILIDADES
 # ==========================================================
-
-def clean_text(value):
-    if not value:
-        return None
-
-    value = re.sub(r"\s+", " ", str(value))
-    value = value.strip()
-
-    return value if value else None
-
-
-def only_digits(value):
-    if not value:
-        return None
-
-    digits = re.sub(r"[^\d]", "", str(value))
-    return int(digits) if digits else None
-
-
-def parse_decimal(value):
-    if not value:
-        return None
-
-    value = str(value).replace(",", ".")
-    match = re.search(r"(\d+(?:\.\d+)?)", value)
-
-    if not match:
-        return None
-
-    try:
-        return float(match.group(1))
-    except ValueError:
-        return None
-
-
-def parse_int(value):
-    if value is None:
-        return None
-
-    match = re.search(r"\d+", str(value))
-    return int(match.group()) if match else None
-
-
-def sanitize_filename(value):
-    value = value or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", str(value))
-    return value[:120]
-
-
-def file_hash(path):
-    sha256 = hashlib.sha256()
-
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(8192), b""):
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
-
-
-def get_lines(text):
-    if not text:
-        return []
-
-    return [line.strip() for line in text.splitlines() if line.strip()]
-
 
 def value_after_label(lines, label):
     label_lower = label.lower().replace(":", "").strip()
@@ -485,77 +445,6 @@ def extract_administracion(text):
 # BASE DE DATOS
 # ==========================================================
 
-def get_connection():
-    return mysql.connector.connect(**get_db_config())
-
-
-def get_or_create_fuente_id(connection):
-    sql = """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE
-    """
-
-    values = (
-        "Ciencuadras",
-        "https://www.ciencuadras.com",
-        "portal",
-        "Portal inmobiliario usado para extracción automática de publicaciones en Pasto."
-    )
-
-    cursor = connection.cursor()
-    cursor.execute(sql, values)
-    connection.commit()
-
-    fuente_id = cursor.lastrowid
-    cursor.close()
-
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    """
-    Verifica si la publicación ya existe en la base de datos.
-    Si existe, se salta completamente.
-
-    Cuando hay codigo_externo tambien se valida por (fuente_id, codigo_externo):
-    Ciencuadras reutiliza el mismo codigo bajo URLs distintas, y validar solo por
-    link_origen dejaba entrar duplicados.
-    """
-
-    cursor = connection.cursor()
-
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo)
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,)
-        )
-
-    result = cursor.fetchone()
-    cursor.close()
-
-    return result[0] if result else None
-
-
 def insert_publicacion(connection, data):
     """
     Inserta solo publicaciones nuevas.
@@ -628,83 +517,9 @@ def insert_publicacion(connection, data):
     return publicacion_id
 
 
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo)
-    )
-
-    exists = cursor.fetchone()
-
-    if exists:
-        cursor.close()
-        return
-
-    hash_archivo = None
-
-    if ruta_archivo and Path(ruta_archivo).exists():
-        hash_archivo = file_hash(ruta_archivo)
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-    )
-
-    connection.commit()
-    cursor.close()
-
-
 # ==========================================================
 # EVIDENCIAS POR ID DE PUBLICACIÓN
 # ==========================================================
-
-def get_publication_evidence_dirs(publicacion_id):
-    """
-    Crea carpetas separadas por ID de publicación.
-
-    Ejemplo:
-    evidencias/publicacion_1/html
-    evidencias/publicacion_1/imagenes
-    evidencias/publicacion_1/screenshots
-    """
-
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    screenshot_dir = base_dir / "screenshots"
-
-    for folder in [html_dir, img_dir, screenshot_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    return html_dir, img_dir, screenshot_dir
-
 
 def save_html(html, codigo_archivo, publicacion_id):
     html_dir, _, _ = get_publication_evidence_dirs(publicacion_id)

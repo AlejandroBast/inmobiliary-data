@@ -3,7 +3,6 @@ import re
 import json
 import time
 import math
-import hashlib
 import html as html_module
 import requests
 import mysql.connector
@@ -15,10 +14,20 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
+import scraper_common as common
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from net_retry import with_retry
+from scraper_common import (
+    clean_text,
+    get_connection,
+    get_lines,
+    insert_evidencia,
+    only_digits,
+    parse_int,
+    publicacion_ya_existe,
+    sanitize_filename,
+)
 from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
@@ -55,32 +64,24 @@ EVIDENCE_DIR = Path("evidencias")
 EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def get_publication_evidence_dirs(publicacion_id):
+    return common.get_publication_evidence_dirs(publicacion_id, EVIDENCE_DIR)
+
+
+def get_or_create_fuente_id(connection):
+    return common.get_or_create_fuente_id(
+        connection,
+        "Fincaraiz",
+        BASE_URL,
+        "portal",
+        "Scraper de inmuebles en venta en Pasto desde Fincaraiz",
+    )
+
+
+
 # ==========================================================
 # UTILIDADES
 # ==========================================================
-
-def clean_text(value):
-    if value is None:
-        return None
-
-    value = re.sub(r"\s+", " ", str(value)).strip()
-    return value if value else None
-
-
-def get_lines(text):
-    if not text:
-        return []
-
-    return [line.strip() for line in text.splitlines() if line.strip()]
-
-
-def only_digits(value):
-    if not value:
-        return None
-
-    digits = re.sub(r"[^\d]", "", str(value))
-    return int(digits) if digits else None
-
 
 def parse_colombian_decimal(value):
     """
@@ -120,30 +121,6 @@ def parse_colombian_decimal(value):
         return float(number)
     except ValueError:
         return None
-
-
-def parse_int(value):
-    if value is None:
-        return None
-
-    match = re.search(r"\d+", str(value))
-    return int(match.group()) if match else None
-
-
-def sanitize_filename(value):
-    value = value or str(int(time.time()))
-    value = re.sub(r"[^a-zA-Z0-9_-]", "_", str(value))
-    return value[:120]
-
-
-def file_hash(path):
-    sha256 = hashlib.sha256()
-
-    with open(path, "rb") as file:
-        for chunk in iter(lambda: file.read(8192), b""):
-            sha256.update(chunk)
-
-    return sha256.hexdigest()
 
 
 def normalize_label(value):
@@ -728,70 +705,6 @@ def extract_coordinates_from_source(html, text):
 # BASE DE DATOS
 # ==========================================================
 
-def get_connection():
-    return mysql.connector.connect(**get_db_config())
-
-
-def get_or_create_fuente_id(connection):
-    sql = """
-        INSERT INTO fuentes_inmobiliarias
-        (nombre, url_base, tipo_fuente, activa, descripcion)
-        VALUES (%s, %s, %s, TRUE, %s)
-        ON DUPLICATE KEY UPDATE
-            id = LAST_INSERT_ID(id),
-            activa = TRUE,
-            url_base = VALUES(url_base),
-            descripcion = VALUES(descripcion)
-    """
-
-    values = (
-        "Fincaraiz",
-        "https://www.fincaraiz.com.co",
-        "portal",
-        "Portal inmobiliario usado para extracción automática de publicaciones en venta en Pasto, Nariño."
-    )
-
-    cursor = connection.cursor()
-    cursor.execute(sql, values)
-    connection.commit()
-
-    fuente_id = cursor.lastrowid
-    cursor.close()
-
-    return fuente_id
-
-
-def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
-    cursor = connection.cursor()
-
-    if codigo_externo and fuente_id:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-               OR (fuente_id = %s AND codigo_externo = %s)
-            LIMIT 1
-            """,
-            (link_origen, fuente_id, codigo_externo)
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT id
-            FROM publicaciones
-            WHERE link_origen = %s
-            LIMIT 1
-            """,
-            (link_origen,)
-        )
-
-    result = cursor.fetchone()
-    cursor.close()
-
-    return result[0] if result else None
-
-
 def insert_publicacion(connection, data):
     sql = """
         INSERT INTO publicaciones (
@@ -891,68 +804,9 @@ def update_existing_coordinates(connection, publicacion_id, data):
     return updated
 
 
-def insert_evidencia(connection, publicacion_id, tipo, ruta_archivo, url_original=None):
-    ruta_archivo = str(ruta_archivo) if ruta_archivo else None
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        SELECT id
-        FROM evidencias_publicacion
-        WHERE publicacion_id = %s
-          AND tipo = %s
-          AND ruta_archivo = %s
-        LIMIT 1
-        """,
-        (publicacion_id, tipo, ruta_archivo)
-    )
-
-    exists = cursor.fetchone()
-
-    if exists:
-        cursor.close()
-        return
-
-    hash_archivo = None
-
-    if ruta_archivo and Path(ruta_archivo).exists():
-        hash_archivo = file_hash(ruta_archivo)
-
-    cursor.execute(
-        """
-        INSERT INTO evidencias_publicacion (
-            publicacion_id,
-            tipo,
-            ruta_archivo,
-            url_original,
-            hash_archivo
-        )
-        VALUES (%s, %s, %s, %s, %s)
-        """,
-        (publicacion_id, tipo, ruta_archivo, url_original, hash_archivo)
-    )
-
-    connection.commit()
-    cursor.close()
-
-
 # ==========================================================
 # EVIDENCIAS POR ID DE PUBLICACIÓN
 # ==========================================================
-
-def get_publication_evidence_dirs(publicacion_id):
-    base_dir = EVIDENCE_DIR / f"publicacion_{publicacion_id}"
-
-    html_dir = base_dir / "html"
-    img_dir = base_dir / "imagenes"
-    screenshot_dir = base_dir / "screenshots"
-
-    for folder in [html_dir, img_dir, screenshot_dir]:
-        folder.mkdir(parents=True, exist_ok=True)
-
-    return html_dir, img_dir, screenshot_dir
-
 
 def save_html(html, codigo_archivo, publicacion_id):
     html_dir, _, _ = get_publication_evidence_dirs(publicacion_id)
