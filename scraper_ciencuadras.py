@@ -515,23 +515,39 @@ def get_or_create_fuente_id(connection):
     return fuente_id
 
 
-def publicacion_ya_existe(connection, link_origen):
+def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
     """
     Verifica si la publicación ya existe en la base de datos.
     Si existe, se salta completamente.
+
+    Cuando hay codigo_externo tambien se valida por (fuente_id, codigo_externo):
+    Ciencuadras reutiliza el mismo codigo bajo URLs distintas, y validar solo por
+    link_origen dejaba entrar duplicados.
     """
 
     cursor = connection.cursor()
 
-    cursor.execute(
-        """
-        SELECT id
-        FROM publicaciones
-        WHERE link_origen = %s
-        LIMIT 1
-        """,
-        (link_origen,)
-    )
+    if codigo_externo and fuente_id:
+        cursor.execute(
+            """
+            SELECT id
+            FROM publicaciones
+            WHERE link_origen = %s
+               OR (fuente_id = %s AND codigo_externo = %s)
+            LIMIT 1
+            """,
+            (link_origen, fuente_id, codigo_externo)
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT id
+            FROM publicaciones
+            WHERE link_origen = %s
+            LIMIT 1
+            """,
+            (link_origen,)
+        )
 
     result = cursor.fetchone()
     cursor.close()
@@ -1635,10 +1651,27 @@ def main():
                     audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
+                publicacion_existente_id = publicacion_ya_existe(
+                    connection,
+                    link,
+                    fuente_id,
+                    data["codigo_externo"],
+                )
+
+                if publicacion_existente_id:
+                    total_saltadas += 1
+                    print(f"[SKIP] Código externo ya existe. ID {publicacion_existente_id}")
+                    continue
+
                 try:
                     publicacion_id = insert_publicacion(connection, data)
                 except IntegrityError:
-                    publicacion_existente_id = publicacion_ya_existe(connection, link)
+                    publicacion_existente_id = publicacion_ya_existe(
+                        connection,
+                        link,
+                        fuente_id,
+                        data["codigo_externo"],
+                    )
 
                     if publicacion_existente_id:
                         total_saltadas += 1
