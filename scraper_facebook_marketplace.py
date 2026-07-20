@@ -32,6 +32,7 @@ except ImportError:
 from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from net_retry import with_retry
 from scraper_audit import ScraperAudit
 
 
@@ -370,7 +371,10 @@ def create_audit(search_urls):
 
 
 def goto_page(page, url, wait_until="domcontentloaded"):
-    page.goto(url, wait_until=wait_until, timeout=PAGE_TIMEOUT_MS)
+    with_retry(
+        lambda: page.goto(url, wait_until=wait_until, timeout=PAGE_TIMEOUT_MS),
+        f"Abrir {url}",
+    )
     page.wait_for_timeout(1200)
 
 
@@ -1990,9 +1994,12 @@ def download_image_with_context(context, image_url, codigo_archivo, index, publi
         return path
     except Exception as first_error:
         try:
-            request = Request(image_url, headers={"User-Agent": USER_AGENT})
-            with urlopen(request, timeout=15) as response:
-                content = response.read()
+            def fetch_image():
+                request = Request(image_url, headers={"User-Agent": USER_AGENT})
+                with urlopen(request, timeout=15) as response:
+                    return response.read()
+
+            content = with_retry(fetch_image, f"Descargar imagen {image_url}")
             if not content:
                 return None
             with open(path, "wb") as file:

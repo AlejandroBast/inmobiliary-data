@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from net_retry import with_retry
 from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
@@ -1066,15 +1067,18 @@ def download_image(image_url, codigo_archivo, index, publicacion_id):
     _, img_dir, _ = get_publication_evidence_dirs(publicacion_id)
 
     try:
-        response = requests.get(
-            image_url,
+        def fetch_image():
+            response = requests.get(
+                image_url,
                 timeout=IMAGE_DOWNLOAD_TIMEOUT,
                 headers={
                     "User-Agent": "Mozilla/5.0"
                 }
-        )
+            )
+            response.raise_for_status()
+            return response
 
-        response.raise_for_status()
+        response = with_retry(fetch_image, f"Descargar imagen {image_url}")
 
         content_type = response.headers.get("Content-Type", "").lower()
 
@@ -1338,7 +1342,10 @@ def collect_publication_links(page):
     all_links = set()
 
     try:
-        page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000)
+        with_retry(
+            lambda: page.goto(SEARCH_URL, wait_until="domcontentloaded", timeout=60000),
+            f"Abrir listado {SEARCH_URL}",
+        )
     except Exception as error:
         reason = f"No se pudo abrir la primera pagina de resultados: {error}"
         print(f"[ERROR] {reason}")
@@ -1468,7 +1475,10 @@ def collect_publication_links(page):
 def extract_publication_data(page, url, fuente_id):
     print(f"[INFO] Extrayendo publicación: {url}")
 
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    with_retry(
+        lambda: page.goto(url, wait_until="domcontentloaded", timeout=60000),
+        f"Abrir publicación {url}",
+    )
 
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
