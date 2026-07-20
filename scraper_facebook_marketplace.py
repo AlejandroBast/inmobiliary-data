@@ -89,6 +89,12 @@ TRUST_SALE_FILTERS = os.getenv("FACEBOOK_TRUST_SALE_FILTERS", "true").lower() in
 SPLIT_PRICE_BUCKETS = os.getenv("FACEBOOK_SPLIT_PRICE_BUCKETS", "true").lower() in ("1", "true", "yes", "y")
 INCLUDE_UNFILTERED_LISTING = os.getenv("FACEBOOK_INCLUDE_UNFILTERED_LISTING", "true").lower() in ("1", "true", "yes", "y")
 MAX_SCROLLS = int(os.getenv("FACEBOOK_MAX_SCROLLS", "80"))
+# Fuerza el barrido completo por buckets de precio aunque ya haya publicaciones.
+FULL_SWEEP = os.getenv("FACEBOOK_FULL_SWEEP", "false").lower() in ("1", "true", "yes", "y")
+# Cuantos links seguidos ya guardados hacen falta para cortar un listado.
+# Las URLs van ordenadas por creation_time_descend: al llegar a lo ya conocido,
+# lo que sigue es mas viejo todavia.
+CONSECUTIVE_EXISTING_LIMIT = int(os.getenv("FACEBOOK_CONSECUTIVE_EXISTING_LIMIT", "5"))
 STALL_SCROLLS = int(os.getenv("FACEBOOK_STALL_SCROLLS", "4"))
 MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "0"))
 MAX_DETAILS = int(os.getenv("FACEBOOK_MAX_DETAILS", "0"))
@@ -306,7 +312,7 @@ def get_search_phrases():
     return split_env_list(os.getenv("FACEBOOK_SEARCH_PHRASES"))
 
 
-def build_search_urls():
+def build_search_urls(incremental=False):
     configured_urls = split_env_list(os.getenv("FACEBOOK_MARKETPLACE_URLS"))
     if configured_urls:
         base_urls = configured_urls
@@ -332,6 +338,16 @@ def build_search_urls():
                 params["sortBy"] = "creation_time_descend"
                 urls.append(f"{BASE_URL}/marketplace/{quote_plus(SEARCH_CITY)}/search/?{urlencode(params)}")
             base_urls = urls
+
+    # En modo incremental alcanza con el listado sin filtro de precio, pero el
+    # orden por mas reciente es obligatorio: el corte por links ya existentes
+    # solo es correcto si lo que sigue es mas viejo. DEFAULT_MARKETPLACE_URLS y
+    # las URLs de FACEBOOK_MARKETPLACE_URLS no lo traen, asi que se fuerza aca.
+    if incremental:
+        return dedupe_urls([
+            set_url_params(base_url, {"sortBy": "creation_time_descend"})
+            for base_url in base_urls
+        ])
 
     if not SPLIT_PRICE_BUCKETS:
         return dedupe_urls(base_urls)
@@ -468,8 +484,8 @@ def export_session_cookies(context):
         print(f"[WARN] No se pudo exportar cookies de sesion: {error}")
 
 
-def collect_publication_links(context):
-    search_urls = build_search_urls()
+def collect_publication_links(context, connection=None, fuente_id=None, incremental=False):
+    search_urls = build_search_urls(incremental)
     audit = create_audit(search_urls)
     audit.set_listing_summary(
         total_reported=None,
@@ -509,6 +525,10 @@ def collect_publication_links(context):
             export_session_cookies(context)
 
         stall_count = 0
+        consecutive_existing = 0
+        listing_ya_guardados = 0
+        alcanzo_lo_ya_guardado = False
+
         for scroll_number in range(1, MAX_SCROLLS + 1):
             page.wait_for_timeout(int(SCROLL_PAUSE_SECONDS * 1000))
             page_links = extract_links_from_page(page)
@@ -521,6 +541,18 @@ def collect_publication_links(context):
                     duplicate_links += 1
                     continue
                 seen.add(item_id)
+
+                if incremental and ya_esta_en_bd(connection, link, fuente_id):
+                    listing_ya_guardados += 1
+                    consecutive_existing += 1
+
+                    if consecutive_existing >= CONSECUTIVE_EXISTING_LIMIT:
+                        alcanzo_lo_ya_guardado = True
+                        break
+
+                    continue
+
+                consecutive_existing = 0
                 all_links.append(link)
                 new_links += 1
                 listing_new_links += 1
@@ -530,6 +562,15 @@ def collect_publication_links(context):
                     break
 
             listing_duplicate_links += duplicate_links
+
+            if alcanzo_lo_ya_guardado:
+                nota = (
+                    f"Listado {query_index} detenido: {CONSECUTIVE_EXISTING_LIMIT} links seguidos "
+                    f"ya estaban en la base. El resto del listado es mas viejo."
+                )
+                print(f"[INFO] {nota}")
+                audit.add_note(nota)
+                break
 
             audit.record_page(
                 f"q{query_index}_scroll_{scroll_number}",
@@ -569,7 +610,7 @@ def collect_publication_links(context):
         print(
             f"[INFO] Listado {query_index} terminado: "
             f"{listing_new_links} nuevos, {listing_duplicate_links} repetidos, "
-            f"{len(all_links)} acumulados"
+            f"{listing_ya_guardados} ya en base, {len(all_links)} acumulados"
         )
 
     page.close()
@@ -1860,6 +1901,47 @@ def get_or_create_fuente_id(connection):
     return fuente_id
 
 
+def buscar_fuente_id(connection):
+    """Busca el id de la fuente sin crearla. Para DRY_RUN, que no debe escribir."""
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT id FROM fuentes_inmobiliarias WHERE nombre = %s LIMIT 1",
+        (SOURCE_NAME,),
+    )
+    result = cursor.fetchone()
+    cursor.close()
+    return result[0] if result else None
+
+
+def hay_publicaciones_previas(connection, fuente_id):
+    """Indica si esta fuente ya tiene publicaciones guardadas."""
+    cursor = connection.cursor()
+    cursor.execute(
+        "SELECT 1 FROM publicaciones WHERE fuente_id = %s LIMIT 1",
+        (fuente_id,),
+    )
+    result = cursor.fetchone()
+    cursor.close()
+    return result is not None
+
+
+def ya_esta_en_bd(connection, link, fuente_id):
+    """Version tolerante a fallos de publicacion_ya_existe, para usar en el scroll.
+
+    Ante un error de consulta devuelve False (tratar el link como nuevo): perder
+    un scroll de mas es preferible a cortar la recoleccion por un fallo puntual.
+    El insert igual valida duplicados.
+    """
+    item_id = extract_marketplace_id(link)
+    codigo_externo = f"FB {item_id}" if item_id else None
+
+    try:
+        return publicacion_ya_existe(connection, link, fuente_id, codigo_externo) is not None
+    except Exception as error:
+        print(f"[WARN] No se pudo verificar si el link ya existe ({error}). Se trata como nuevo.")
+        return False
+
+
 def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
     cursor = connection.cursor()
     if codigo_externo and fuente_id:
@@ -2046,7 +2128,7 @@ def main():
     print(f"[INFO] FACEBOOK_MAX_SCROLLS: {MAX_SCROLLS}")
     print(f"[INFO] FACEBOOK_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
     print(f"[INFO] FACEBOOK_SPLIT_PRICE_BUCKETS: {SPLIT_PRICE_BUCKETS}")
-    print(f"[INFO] Listados Facebook planeados: {len(build_search_urls())}")
+    print(f"[INFO] FACEBOOK_FULL_SWEEP: {FULL_SWEEP}")
     print(f"[INFO] Perfil Chromium: {PROFILE_DIR.resolve()}")
 
     connection = None
@@ -2056,33 +2138,64 @@ def main():
     total_omitidas = 0
     total_errores = 0
 
+    # La conexion se abre antes de recolectar: hace falta saber si esta fuente ya
+    # tiene publicaciones para decidir entre barrido completo e incremental.
+    # Si MySQL no responde, cortar aca evita scrollear listados enteros al pedo.
+    incremental = False
+    if not DRY_RUN:
+        try:
+            connection = get_connection()
+            fuente_id = get_or_create_fuente_id(connection)
+            incremental = not FULL_SWEEP and hay_publicaciones_previas(connection, fuente_id)
+        except Exception as error:
+            print_db_connection_help(error)
+            return
+    else:
+        # En DRY_RUN se consulta la BD solo para decidir el modo y saltear links
+        # ya guardados; nunca se escribe. Sin esto no habria forma de probar el
+        # modo incremental sin guardar datos. Si MySQL no esta, sigue igual.
+        try:
+            connection = get_connection()
+            fuente_id = buscar_fuente_id(connection)
+            incremental = (
+                not FULL_SWEEP
+                and fuente_id is not None
+                and hay_publicaciones_previas(connection, fuente_id)
+            )
+        except Exception as error:
+            print(f"[WARN] DRY_RUN sin MySQL ({error}). Se hace barrido completo.")
+            connection = None
+            fuente_id = None
+
+    if incremental:
+        print("[INFO] Modo incremental: la fuente ya tiene publicaciones.")
+        print("[INFO] Se usa solo el listado mas reciente, sin buckets de precio.")
+        print(f"[INFO] Corta tras {CONSECUTIVE_EXISTING_LIMIT} links seguidos ya guardados.")
+    else:
+        if FULL_SWEEP:
+            motivo = "FACEBOOK_FULL_SWEEP"
+        elif connection is None:
+            motivo = "sin conexion a MySQL"
+        else:
+            motivo = "fuente sin publicaciones"
+        print(f"[INFO] Modo barrido completo ({motivo}).")
+
+    print(f"[INFO] Listados Facebook planeados: {len(build_search_urls(incremental))}")
+
     with sync_playwright() as playwright:
         context = open_facebook_context(playwright)
         try:
-            publication_links, audit = collect_publication_links(context)
+            publication_links, audit = collect_publication_links(
+                context,
+                connection=connection,
+                fuente_id=fuente_id,
+                incremental=incremental,
+            )
             if MAX_DETAILS > 0:
                 audit.add_note(f"FACEBOOK_MAX_DETAILS={MAX_DETAILS} limito el procesamiento de detalles.")
                 publication_links = publication_links[:MAX_DETAILS]
             print(f"[INFO] Total links Facebook encontrados: {len(publication_links)}")
             save_collected_links(publication_links, audit)
-
-            if not DRY_RUN:
-                try:
-                    connection = get_connection()
-                    fuente_id = get_or_create_fuente_id(connection)
-                except Exception as error:
-                    total_errores += 1
-                    audit.record_error("mysql", error)
-                    print_db_connection_help(error)
-                    audit.set_processing_counts(
-                        nuevas=total_nuevas,
-                        saltadas=total_saltadas,
-                        omitidas=total_omitidas,
-                        errores=total_errores,
-                    )
-                    audit.print_summary(len(publication_links))
-                    audit.save(len(publication_links))
-                    return
 
             detail_page = context.new_page()
             for index, link in enumerate(publication_links, start=1):
