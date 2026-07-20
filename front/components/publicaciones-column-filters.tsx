@@ -95,13 +95,14 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
       <th className="p-1">{button("area", "Filtrar")}</th>
       <th className="p-1 text-center text-[10px] font-normal text-muted-foreground">Calculado</th>
       <th className="p-1">{button("caracteristicas", "Filtrar")}</th>
+      <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1 text-center text-[10px] font-normal text-muted-foreground">Sin filtro</th>
       <th className="p-1">{button("fecha", "Filtrar")}</th>
       <th className="p-1"><Button type="button" variant="ghost" size="sm" onClick={clearFilters} className="h-7 gap-1 px-2 text-[11px]"><Eraser className="size-3" />Limpiar</Button></th>
     </tr>
     {openGroup && (
       <tr className="border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30">
-        <th colSpan={11} className="p-3">
+        <th colSpan={12} className="p-3">
           <div className="flex flex-wrap items-center gap-2 text-left font-normal">
             {openGroup === "id" && <Input type="number" placeholder="ID exacto" value={values.id} onChange={(e) => setField("id", e.target.value)} className={inputClass} />}
             {openGroup === "publicacion" && <>
