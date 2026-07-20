@@ -29,6 +29,7 @@ except ImportError:
     PlaywrightTimeoutError = TimeoutError
     sync_playwright = None
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from scraper_audit import ScraperAudit
@@ -39,13 +40,8 @@ load_dotenv()
 BASE_URL = "https://www.facebook.com"
 SOURCE_NAME = "Facebook Marketplace"
 
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3301")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "Nico123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
+# Facebook corre contra una instancia MySQL en 3301 salvo que se indique otra.
+DB_DEFAULT_PORT = "3301"
 
 DEFAULT_MARKETPLACE_URLS = [
     (
@@ -1812,34 +1808,26 @@ def save_collected_links(publication_links, audit):
 
 
 def print_db_connection_help(error):
-    if "DB_PASSWORD" in os.environ:
-        password_status = "definida_en_entorno_o_env"
-    elif DB_CONFIG.get("password"):
-        password_status = "valor_por_defecto"
-    else:
-        password_status = "vacia"
     print("[ERROR] No se pudo conectar a MySQL.")
     print(f"[ERROR] Detalle: {error}")
     print(
         "[ERROR] Config usada: "
-        f"DB_HOST={DB_CONFIG.get('host')} "
-        f"DB_PORT={DB_CONFIG.get('port')} "
-        f"DB_USER={DB_CONFIG.get('user')} "
-        f"DB_NAME={DB_CONFIG.get('database')} "
-        f"DB_PASSWORD={password_status}"
+        f"DB_HOST={os.getenv('DB_HOST', 'localhost')} "
+        f"DB_PORT={os.getenv('DB_PORT', DB_DEFAULT_PORT)} "
+        f"DB_USER={os.getenv('DB_USER', 'root')} "
+        f"DB_NAME={os.getenv('DB_NAME', 'db_inmobiliary_data')} "
+        "DB_PASSWORD=definida_en_entorno_o_env"
     )
-    if "DB_PASSWORD" not in os.environ:
-        print("[ERROR] No hay DB_PASSWORD en el entorno/.env; se uso el valor por defecto del script.")
     print("[ERROR] Soluciones:")
-    print("[ERROR] - Define la clave correcta: $env:DB_PASSWORD=\"tu_clave_mysql\"")
-    print("[ERROR] - Revisa el puerto: $env:DB_PORT=\"3306\" o el que use tu MySQL.")
+    print("[ERROR] - Revisa que DB_PASSWORD sea la clave correcta de tu MySQL.")
+    print(f"[ERROR] - Revisa el puerto: $env:DB_PORT=\"{DB_DEFAULT_PORT}\" o el que use tu MySQL.")
     print("[ERROR] - Para probar sin guardar: $env:FACEBOOK_DRY_RUN=\"true\"")
 
 
 def get_connection():
     if mysql is None:
         raise RuntimeError("mysql-connector-python no esta instalado.")
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**get_db_config(DB_DEFAULT_PORT))
 
 
 def get_or_create_fuente_id(connection):

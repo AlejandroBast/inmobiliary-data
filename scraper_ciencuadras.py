@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from ph_detector import detect_ph
@@ -39,14 +40,6 @@ BASE_URL = "https://www.ciencuadras.com"
 # toda la pagina: hay que escopar siempre a este selector.
 PAGINATION_CONTAINER_SELECTOR = "ul.pagination.desktop"
 # --- FIN CAMBIO ---
-
-DB_CONFIG = {
-    "host": os.getenv("DB_HOST", "localhost"),
-    "port": int(os.getenv("DB_PORT", "3306")),
-    "user": os.getenv("DB_USER", "root"),
-    "password": os.getenv("DB_PASSWORD", "boludo123"),
-    "database": os.getenv("DB_NAME", "db_inmobiliary_data"),
-}
 
 HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 # 0 = recorrer todas las paginas detectadas.
@@ -492,7 +485,7 @@ def extract_administracion(text):
 # ==========================================================
 
 def get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**get_db_config())
 
 
 def get_or_create_fuente_id(connection):
@@ -522,23 +515,39 @@ def get_or_create_fuente_id(connection):
     return fuente_id
 
 
-def publicacion_ya_existe(connection, link_origen):
+def publicacion_ya_existe(connection, link_origen=None, fuente_id=None, codigo_externo=None):
     """
     Verifica si la publicación ya existe en la base de datos.
     Si existe, se salta completamente.
+
+    Cuando hay codigo_externo tambien se valida por (fuente_id, codigo_externo):
+    Ciencuadras reutiliza el mismo codigo bajo URLs distintas, y validar solo por
+    link_origen dejaba entrar duplicados.
     """
 
     cursor = connection.cursor()
 
-    cursor.execute(
-        """
-        SELECT id
-        FROM publicaciones
-        WHERE link_origen = %s
-        LIMIT 1
-        """,
-        (link_origen,)
-    )
+    if codigo_externo and fuente_id:
+        cursor.execute(
+            """
+            SELECT id
+            FROM publicaciones
+            WHERE link_origen = %s
+               OR (fuente_id = %s AND codigo_externo = %s)
+            LIMIT 1
+            """,
+            (link_origen, fuente_id, codigo_externo)
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT id
+            FROM publicaciones
+            WHERE link_origen = %s
+            LIMIT 1
+            """,
+            (link_origen,)
+        )
 
     result = cursor.fetchone()
     cursor.close()
@@ -1642,10 +1651,27 @@ def main():
                     audit.record_omission("sin_datos_extraidos_o_sin_precio", link)
                     continue
 
+                publicacion_existente_id = publicacion_ya_existe(
+                    connection,
+                    link,
+                    fuente_id,
+                    data["codigo_externo"],
+                )
+
+                if publicacion_existente_id:
+                    total_saltadas += 1
+                    print(f"[SKIP] Código externo ya existe. ID {publicacion_existente_id}")
+                    continue
+
                 try:
                     publicacion_id = insert_publicacion(connection, data)
                 except IntegrityError:
-                    publicacion_existente_id = publicacion_ya_existe(connection, link)
+                    publicacion_existente_id = publicacion_ya_existe(
+                        connection,
+                        link,
+                        fuente_id,
+                        data["codigo_externo"],
+                    )
 
                     if publicacion_existente_id:
                         total_saltadas += 1
