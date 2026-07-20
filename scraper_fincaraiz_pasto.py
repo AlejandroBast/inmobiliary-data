@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
 
@@ -602,24 +603,11 @@ def extract_administracion(lines, text):
 
 
 def extract_ph(description):
-    if not description:
-        return None
-
-    patterns = [
-        r"(Conjunto\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s\-_\.]+)",
-        r"(Edificio\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s\-_\.]+)",
-        r"(Condominio\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s\-_\.]+)",
-        r"(Urbanización\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s\-_\.]+)",
-        r"(Torres?\s+[A-Za-zÁÉÍÓÚÑáéíóúñ0-9\s\-_\.]+)",
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, description, re.IGNORECASE)
-
-        if match:
-            return clean_text(match.group(1))
-
-    return None
+    # Deteccion centralizada en ph_detector: ademas del nombre propio
+    # (Conjunto/Edificio/Condominio/Urbanizacion/Torres) que ya se buscaba
+    # aqui, ahora tambien reconoce menciones sueltas (PH, Propiedad
+    # Horizontal, administracion incluida) que antes esta funcion no capturaba.
+    return detect_ph(description)
 
 
 def valid_colombia_coordinates(latitud, longitud):
