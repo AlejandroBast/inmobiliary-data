@@ -74,6 +74,13 @@ type ComparisonDismissTarget = {
   relatedId: number
 }
 
+function thumbSrc(src: string, width: number) {
+  return `${src}?w=${width}`
+}
+
+const CAROUSEL_THUMB_WIDTH = 640
+const DETAIL_THUMB_WIDTH = 320
+
 function ComparisonImageCarousel({
   publicationId,
   images,
@@ -103,8 +110,10 @@ function ComparisonImageCarousel({
     ]
 
     for (const neighborIndex of neighborIndexes) {
-      const source = images[neighborIndex]?.src
-      if (!source || preloadedImages.current.has(source)) continue
+      const rawSource = images[neighborIndex]?.src
+      if (!rawSource) continue
+      const source = thumbSrc(rawSource, CAROUSEL_THUMB_WIDTH)
+      if (preloadedImages.current.has(source)) continue
 
       const preload = new window.Image()
       preload.decoding = "async"
@@ -126,11 +135,12 @@ function ComparisonImageCarousel({
     <div className="relative aspect-[16/10] overflow-hidden bg-slate-100 dark:bg-white/5">
       {image ? (
         <img
-          src={image.src}
+          src={thumbSrc(image.src, CAROUSEL_THUMB_WIDTH)}
           alt={`Publicacion ${publicationId}`}
           className="size-full select-none object-cover"
           decoding="async"
           loading="eager"
+          fetchPriority="high"
           draggable={false}
         />
       ) : (
@@ -857,9 +867,11 @@ export function PublicacionesManagerPro({
                       <div key={image.src} className="group relative overflow-hidden rounded-lg border bg-muted">
                         <a href={image.src} target="_blank" rel="noopener noreferrer" className="block">
                           <img
-                            src={image.src}
+                            src={thumbSrc(image.src, DETAIL_THUMB_WIDTH)}
                             alt={`Imagen de publicacion ${detail.id}`}
                             className="h-28 w-full object-cover transition group-hover:brightness-75"
+                            loading="lazy"
+                            decoding="async"
                           />
                         </a>
                         <Button
