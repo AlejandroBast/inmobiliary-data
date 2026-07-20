@@ -3,7 +3,6 @@ import re
 import json
 import time
 import math
-import hashlib
 import requests
 import mysql.connector
 
@@ -14,14 +13,12 @@ from dotenv import load_dotenv
 from mysql.connector import IntegrityError
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from db_config import get_db_config
 from duplicate_detector import detect_duplicates_safely
 import scraper_common as common
 from location_normalizer import location_diagnostic, resolve_pasto_location
 from net_retry import with_retry
 from scraper_common import (
     clean_text,
-    file_hash,
     get_connection,
     get_lines,
     insert_evidencia,
