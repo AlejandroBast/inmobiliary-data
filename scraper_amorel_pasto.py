@@ -26,6 +26,7 @@ except ImportError:
 
 from duplicate_detector import detect_duplicates_safely
 from location_normalizer import location_diagnostic, resolve_pasto_location
+from ph_detector import detect_ph
 from scraper_audit import ScraperAudit
 
 
@@ -699,31 +700,11 @@ def extract_conjunto_edificio(title, description):
 
 
 def extract_ph_value(text, edificio_conjunto=None):
-    source = normalize_text(text)
-
-    if re.search(r"\b(NO\s+PH|SIN\s+PH|NO\s+PROPIEDAD\s+HORIZONTAL|SIN\s+EDIFICIO)\b", source):
-        return None
-    if edificio_conjunto:
-        return edificio_conjunto
-
-    ph_keywords = [
-        "PROPIEDAD HORIZONTAL",
-        " P H ",
-        " PH ",
-        "CONJUNTO",
-        "CONJUNTO CERRADO",
-        "EDIFICIO",
-        "UNIDAD RESIDENCIAL",
-        "CONDOMINIO",
-        "URBANIZACION CERRADA",
-        "MIRADOR TORRES",
-        "RESERVAS DE",
-    ]
-
-    if any(keyword in f" {source} " for keyword in ph_keywords):
-        return "Si"
-
-    return None
+    # Delega la deteccion generica (negacion + keywords) al modulo compartido
+    # ph_detector; edificio_conjunto sigue viniendo de extract_conjunto_edificio,
+    # que es mas preciso que cualquier regex generica porque ya usa el
+    # LOCATION_STOP y el limpiador de nombres propios de este scraper.
+    return detect_ph(text, complex_name=edificio_conjunto)
 
 
 def extract_barrio(title, description):
