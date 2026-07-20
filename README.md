@@ -2,6 +2,15 @@
 py -3 -m pip install -r requirements.txt
 py -3 -m playwright install chromium
 
+## Pruebas
+
+```powershell
+py -3 -m pip install -r requirements-dev.txt
+py -3 -m pytest tests/ -q
+```
+
+No necesitan Playwright, MySQL ni conexión a los portales.
+
 ## Configuración compartida
 
 El bot de Python y el front de Next.js usan la misma base de datos MySQL.
