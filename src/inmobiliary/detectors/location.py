@@ -6,7 +6,9 @@ from functools import lru_cache
 from pathlib import Path
 
 
-CATALOG_PATH = Path(__file__).resolve().parent / "data" / "pasto_barrios_veredas.tsv"
+# El catalogo vive en data/ en la raiz del repo, no junto al modulo.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CATALOG_PATH = REPO_ROOT / "data" / "pasto_barrios_veredas.tsv"
 OUTSIDE_PLACES = {
     "bogota", "bello", "buesaco", "chachagui", "cundinamarca", "girardot",
     "imues", "medellin", "mocoa", "ricaurte", "sandona", "taminango",

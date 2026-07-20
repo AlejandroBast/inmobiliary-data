@@ -5,7 +5,11 @@ from pathlib import Path
 import mysql.connector
 from dotenv import load_dotenv
 
-from db_config import get_db_config
+from inmobiliary.config import get_db_config
+
+
+# Las migraciones viven en db/migrations/ en la raiz del repo.
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "db" / "migrations"
 
 
 load_dotenv()
@@ -15,7 +19,7 @@ def main():
     connection = mysql.connector.connect(**get_db_config())
     cursor = connection.cursor()
     try:
-        migration = Path(__file__).with_name("migrations") / "003_catalogos_ubicacion_tipo.sql"
+        migration = MIGRATIONS_DIR / "003_catalogos_ubicacion_tipo.sql"
         sql = migration.read_text(encoding="utf-8")
         statements = [statement.strip() for statement in sql.split(";") if statement.strip()]
         for statement in statements:

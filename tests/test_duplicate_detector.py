@@ -1,7 +1,7 @@
 from io import BytesIO
 import unittest
 
-from duplicate_detector import (
+from inmobiliary.detectors.duplicates import (
     Image,
     dhash_image,
     hash_distance,

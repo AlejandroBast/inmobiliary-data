@@ -1,6 +1,6 @@
 import pytest
 
-from net_retry import with_retry
+from inmobiliary.net import with_retry
 
 
 def test_devuelve_al_primer_intento_sin_esperar():
@@ -42,7 +42,7 @@ def test_relanza_la_excepcion_al_agotar_intentos():
 
 def test_backoff_es_exponencial(monkeypatch):
     esperas = []
-    monkeypatch.setattr("net_retry.time.sleep", esperas.append)
+    monkeypatch.setattr("inmobiliary.net.time.sleep", esperas.append)
 
     def operacion():
         raise TimeoutError("siempre falla")

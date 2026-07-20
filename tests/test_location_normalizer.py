@@ -1,4 +1,4 @@
-from location_normalizer import resolve_pasto_location
+from inmobiliary.detectors.location import resolve_pasto_location
 
 
 def test_aliases_seguros():

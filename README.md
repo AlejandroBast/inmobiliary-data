@@ -1,6 +1,55 @@
+# inmobiliary-data
+
+Scrapers de inmuebles en venta en Pasto (Fincaraíz, Metrocuadrado, Ciencuadras,
+Amorel, Facebook Marketplace) + front de Next.js sobre la misma base MySQL.
+
+## Estructura
+
+```
+src/inmobiliary/        paquete Python
+├─ config.py            configuracion de conexion a MySQL
+├─ common.py            utilidades compartidas (texto, archivos, capa de BD)
+├─ net.py               reintentos con backoff
+├─ audit.py             auditoria de corridas
+├─ detectors/           duplicados, ubicacion, propiedad horizontal
+└─ scrapers/            un modulo por portal
+scripts/                migraciones, backfills, seed de catalogos
+db/                     schema/, migrations/, queries/
+tests/                  pruebas (no necesitan MySQL ni Playwright)
+docs/                   documentacion
+front/                  aplicacion Next.js
+data/                   catalogo de barrios y veredas de Pasto
+```
+
 # Instalar dependencias
 py -3 -m pip install -r requirements.txt
 py -3 -m playwright install chromium
+py -3 -m pip install -e .
+
+El `pip install -e .` deja el paquete importable desde cualquier carpeta. Si
+preferis no instalarlo, defini `PYTHONPATH=src` antes de ejecutar.
+
+## Ejecutar un scraper
+
+Los scrapers son modulos del paquete, se ejecutan con `-m` desde la raiz:
+
+```powershell
+py -3 -m inmobiliary.scrapers.fincaraiz
+py -3 -m inmobiliary.scrapers.metrocuadrado
+py -3 -m inmobiliary.scrapers.ciencuadras
+py -3 -m inmobiliary.scrapers.amorel
+py -3 -m inmobiliary.scrapers.facebook
+```
+
+## Scripts operativos
+
+```powershell
+py -3 scripts/apply_duplicate_migration.py
+py -3 scripts/apply_catalogos_migration.py
+py -3 scripts/seed_catalogos.py
+py -3 scripts/backfill_duplicate_detection.py
+py -3 scripts/backfill_location_normalization.py
+```
 
 ## Pruebas
 
@@ -29,7 +78,7 @@ El front corre por defecto en `http://localhost:3001`.
 
 ## Scraper Facebook Marketplace
 
-El scraper `scraper_facebook_marketplace.py` usa Playwright con un perfil persistente en `.facebook_profile/`. En el primer uso puede abrir Chromium y pedir login, 2FA o captcha; despues reutiliza esa sesion local.
+El scraper `inmobiliary.scrapers.facebook` usa Playwright con un perfil persistente en `.facebook_profile/`. En el primer uso puede abrir Chromium y pedir login, 2FA o captcha; despues reutiliza esa sesion local.
 
 Prueba sin guardar en MySQL:
 
@@ -37,14 +86,14 @@ Prueba sin guardar en MySQL:
 $env:FACEBOOK_DRY_RUN="true"
 $env:FACEBOOK_MAX_DETAILS="5"
 $env:FACEBOOK_MAX_SCROLLS="8"
-python scraper_facebook_marketplace.py
+py -3 -m inmobiliary.scrapers.facebook
 ```
 
 Ejecucion real:
 
 ```powershell
 $env:FACEBOOK_DRY_RUN="false"
-python scraper_facebook_marketplace.py
+py -3 -m inmobiliary.scrapers.facebook
 ```
 
 Variables utiles:
@@ -81,5 +130,5 @@ $env:DB_PORT="3306"
 $env:DB_USER="root"
 $env:DB_PASSWORD="tu_clave_mysql"
 $env:DB_NAME="db_inmobiliary_data"
-python scraper_facebook_marketplace.py
+py -3 -m inmobiliary.scrapers.facebook
 ```

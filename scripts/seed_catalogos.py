@@ -16,10 +16,10 @@ from pathlib import Path
 import mysql.connector
 from dotenv import load_dotenv
 
-from location_normalizer import load_catalog, normalize_text
+from inmobiliary.detectors.location import load_catalog, normalize_text
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / "front" / ".env.local")
 load_dotenv(ROOT / ".env", override=False)
 

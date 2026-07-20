@@ -13,3 +13,15 @@ __pycache__
 .facebook_profile/
 
 graphify-out
+
+# Empaquetado y cache de Python
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Artefactos del front
+front/.next/
+front/node_modules/
+front/*.log
+front/tsconfig.tsbuildinfo

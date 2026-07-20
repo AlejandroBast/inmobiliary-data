@@ -4,12 +4,15 @@ import { spawn } from "node:child_process"
 import { existsSync } from "node:fs"
 import path from "node:path"
 
+// Los scrapers son modulos del paquete inmobiliary (src/inmobiliary/scrapers/)
+// y se ejecutan con "python -m", no por ruta de archivo. Se guarda tambien la
+// ruta del archivo solo para verificar que exista antes de lanzar el proceso.
 export const SCRAPER_SOURCES = {
-  fincaraiz: { name: "Finca Raiz", file: "scraper_fincaraiz_pasto.py", estimatedSeconds: 600 },
-  ciencuadras: { name: "Ciencuadras", file: "scraper_ciencuadras.py", estimatedSeconds: 600 },
-  metrocuadrado: { name: "Metrocuadrado", file: "scraper_metrocuadrado_pasto.py", estimatedSeconds: 720 },
-  amorel: { name: "Amorel", file: "scraper_amorel_pasto.py", estimatedSeconds: 900 },
-  facebook: { name: "Facebook Marketplace", file: "scraper_facebook_marketplace.py", estimatedSeconds: 600 },
+  fincaraiz: { name: "Finca Raiz", module: "inmobiliary.scrapers.fincaraiz", file: "src/inmobiliary/scrapers/fincaraiz.py", estimatedSeconds: 600 },
+  ciencuadras: { name: "Ciencuadras", module: "inmobiliary.scrapers.ciencuadras", file: "src/inmobiliary/scrapers/ciencuadras.py", estimatedSeconds: 600 },
+  metrocuadrado: { name: "Metrocuadrado", module: "inmobiliary.scrapers.metrocuadrado", file: "src/inmobiliary/scrapers/metrocuadrado.py", estimatedSeconds: 720 },
+  amorel: { name: "Amorel", module: "inmobiliary.scrapers.amorel", file: "src/inmobiliary/scrapers/amorel.py", estimatedSeconds: 900 },
+  facebook: { name: "Facebook Marketplace", module: "inmobiliary.scrapers.facebook", file: "src/inmobiliary/scrapers/facebook.py", estimatedSeconds: 600 },
 } as const
 
 export type ScraperSourceId = keyof typeof SCRAPER_SOURCES
@@ -140,10 +143,18 @@ export function startScraper(sourceId: ScraperSourceId) {
   }
 
   try {
-    appendOutput(job, `Ejecutando: ${[python.command, ...python.args, scriptPath].join(" ")}`)
-    const child = spawn(python.command, [...python.args, scriptPath], {
+    // "-m modulo" en vez de la ruta: ejecutar el archivo directo rompe los
+    // imports absolutos del paquete. PYTHONPATH=src evita depender de que el
+    // paquete este instalado con pip install -e .
+    const spawnArgs = [...python.args, "-m", source.module]
+    appendOutput(job, `Ejecutando: ${[python.command, ...spawnArgs].join(" ")}`)
+    const child = spawn(python.command, spawnArgs, {
       cwd: projectDir,
-      env: { ...process.env, PYTHONUNBUFFERED: "1" },
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: "1",
+        PYTHONPATH: [path.join(projectDir, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+      },
       windowsHide: true,
     })
     processes[sourceId] = child

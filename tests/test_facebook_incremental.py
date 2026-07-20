@@ -1,4 +1,4 @@
-import scraper_facebook_marketplace as fb
+import inmobiliary.scrapers.facebook as fb
 
 
 def test_incremental_usa_un_solo_listado_ordenado_por_mas_reciente():
