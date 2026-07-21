@@ -1,5 +1,6 @@
 import {
   getBarrios,
+  getCoincidenciasPublicaciones,
   getFuentes,
   getPublicaciones,
   getPublicacionesTotal,
@@ -68,6 +69,11 @@ export default async function DashboardPage({
     getPublicacionesTotal(),
     getTiposInmueble(),
   ])
+  const coincidencias = await getCoincidenciasPublicaciones(publicaciones.map((publicacion) => publicacion.id))
+  const publicacionesConCoincidencias = publicaciones.map((publicacion) => ({
+    ...publicacion,
+    coincidencias: coincidencias[publicacion.id] ?? [],
+  }))
 
   const publicacionesSearch = buildSearchString(params)
   const publicacionesHref = publicacionesSearch ? `/?${publicacionesSearch}` : "/"
@@ -116,7 +122,7 @@ export default async function DashboardPage({
       </div>
 
       <PublicacionesDashboardStats
-        publicaciones={publicaciones}
+        publicaciones={publicacionesConCoincidencias}
         totalPublicaciones={totalPublicaciones}
         hasActiveFilters={hasActiveFilters(filtros)}
       />
