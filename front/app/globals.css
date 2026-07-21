@@ -72,7 +72,7 @@
   --chart-3: oklch(0.446 0.043 257.281);
   --chart-4: oklch(0.704 0.14 182.503);
   --chart-5: oklch(0.637 0.237 25.331);
-  --radius: 0.625rem;
+  --radius: 0.85rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
@@ -176,6 +176,63 @@
     @apply rounded-lg border bg-card text-card-foreground shadow-sm;
   }
 
+  /* Superficies reutilizables: reemplazan los literales de borde/fondo
+     que antes se repetian a mano en cada componente. */
+  .surface-panel {
+    @apply rounded-xl border border-border/70 bg-card shadow-sm;
+  }
+
+  .surface-muted {
+    @apply rounded-lg border border-border/70 bg-muted/40 dark:bg-white/[0.04];
+  }
+
+  .surface-interactive {
+    @apply rounded-xl border border-border/70 bg-card shadow-sm transition-all duration-200 hover:border-primary/30 hover:shadow-md;
+  }
+
+  /* Tonos de estado compartidos por badges, iconos y paneles. */
+  .tone-primary {
+    @apply border-primary/20 bg-primary/10 text-primary dark:border-primary/25;
+  }
+
+  .tone-amber {
+    @apply border-amber-200/70 bg-amber-50 text-amber-700 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-300;
+  }
+
+  .tone-rose {
+    @apply border-rose-200/70 bg-rose-50 text-rose-700 dark:border-rose-400/25 dark:bg-rose-400/10 dark:text-rose-300;
+  }
+
+  .tone-slate {
+    @apply border-border bg-muted/50 text-muted-foreground;
+  }
+
+  .icon-chip {
+    @apply flex size-9 shrink-0 items-center justify-center rounded-lg border;
+  }
+
+  .step-badge {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground;
+  }
+
+  .header-accent-bar {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklch, var(--primary) 55%, transparent),
+      transparent
+    );
+  }
+
+  /* Micro-animaciones de entrada, sutiles y cortas. */
+  .animate-fade-up {
+    animation: fade-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.25s ease-out both;
+  }
+
   .price-range {
     pointer-events: none;
   }
@@ -217,5 +274,25 @@
     background: var(--primary);
     box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 18%, transparent);
     cursor: grab;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
