@@ -73,8 +73,8 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
     const active = groupActive(group)
     return (
       <button type="button" onClick={() => setOpenGroup((current) => current === group ? null : group)}
-        className={`mx-auto flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition ${active ? "bg-emerald-600 text-white" : "text-muted-foreground hover:bg-emerald-100 hover:text-emerald-800 dark:hover:bg-emerald-900/40"}`}>
-        <Filter className="size-3" />{label}<ChevronDown className={`size-3 transition ${openGroup === group ? "rotate-180" : ""}`} />
+        className={`mx-auto flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium transition-colors ${active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-primary/10 hover:text-primary"}`}>
+        <Filter className="size-3" />{label}<ChevronDown className={`size-3 transition-transform ${openGroup === group ? "rotate-180" : ""}`} />
       </button>
     )
   }
@@ -86,7 +86,7 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
   </>
 
   return <>
-    <tr className="border-b bg-slate-50/80 dark:bg-zinc-900/80">
+    <tr className="border-b bg-muted/40">
       <th className="p-1">{button("id", "Filtrar")}</th>
       <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1">{button("ubicacion", "Filtrar")}</th>
@@ -101,9 +101,9 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
       <th className="p-1"><Button type="button" variant="ghost" size="sm" onClick={clearFilters} className="h-7 gap-1 px-2 text-[11px]"><Eraser className="size-3" />Limpiar</Button></th>
     </tr>
     {openGroup && (
-      <tr className="border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30">
+      <tr className="tone-primary border-b">
         <th colSpan={12} className="p-3">
-          <div className="flex flex-wrap items-center gap-2 text-left font-normal">
+          <div className="flex flex-wrap items-center gap-2 text-left font-normal text-foreground">
             {openGroup === "id" && <Input type="number" placeholder="ID exacto" value={values.id} onChange={(e) => setField("id", e.target.value)} className={inputClass} />}
             {openGroup === "publicacion" && <>
               <select value={values.tipoInmueble} onChange={(e) => setField("tipoInmueble", e.target.value)} className={selectClass}><option value="">Todos los tipos</option>{tiposInmueble.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
@@ -117,7 +117,7 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
             {openGroup === "caracteristicas" && <><select value={values.habitaciones} onChange={(e) => setField("habitaciones", e.target.value)} className={selectClass}>{numericOptions("Habitaciones")}</select><select value={values.banios} onChange={(e) => setField("banios", e.target.value)} className={selectClass}>{numericOptions("Banos")}</select><select value={values.parqueadero} onChange={(e) => setField("parqueadero", e.target.value)} className={selectClass}>{numericOptions("Parqueaderos", true)}</select></>}
             {openGroup === "fecha" && <Input type="date" value={values.fecha} onChange={(e) => setField("fecha", e.target.value)} className={inputClass} />}
             <div className="ml-auto flex gap-2">
-              <Button type="button" size="sm" onClick={applyFilters} className="gap-1 bg-emerald-600 hover:bg-emerald-700"><Filter className="size-4" />Aplicar</Button>
+              <Button type="button" size="sm" onClick={applyFilters} className="gap-1"><Filter className="size-4" />Aplicar</Button>
               <Button type="button" size="icon" variant="ghost" onClick={() => setOpenGroup(null)} aria-label="Cerrar filtros"><X className="size-4" /></Button>
             </div>
           </div>
