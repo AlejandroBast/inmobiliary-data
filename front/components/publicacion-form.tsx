@@ -426,7 +426,7 @@ export function PublicacionForm({
                         type="button"
                         variant="destructive"
                         size="icon"
-                        className="absolute right-2 top-2 size-9 rounded-full border-2 border-white bg-red-600 text-white opacity-0 shadow-lg transition hover:bg-red-700 group-hover:opacity-100 focus-visible:opacity-100"
+                        className="absolute right-2 top-2 size-9 rounded-full border-2 border-white bg-destructive text-white opacity-0 shadow-lg transition hover:bg-destructive/90 group-hover:opacity-100 focus-visible:opacity-100"
                         aria-label={`Eliminar ${image.name}`}
                         title="Eliminar imagen"
                         disabled={deletingImage !== null}
