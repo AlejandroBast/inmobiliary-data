@@ -27,23 +27,18 @@ export function PublicacionesDataLayout({
           aria-label={open ? "Cerrar filtros" : "Abrir filtros"}
           aria-expanded={open}
           onClick={() => setOpen((current) => !current)}
-          className={[
-            "relative border-emerald-300/50",
-            open
-              ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
-              : "bg-card text-emerald-600 hover:bg-emerald-50 dark:bg-white/5 dark:text-emerald-300 dark:hover:bg-emerald-400/10",
-          ].join(" ")}
+          className={["relative", open ? "" : "text-primary hover:bg-primary/10"].join(" ")}
         >
           <Filter className="size-4" />
           {activeFilterCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-semibold leading-5 text-slate-950 ring-2 ring-background">
+            <span className="absolute -right-1 -top-1 flex min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-5 text-primary-foreground ring-2 ring-background">
               {activeFilterCount}
             </span>
           )}
         </Button>
 
         {activeFilterCount > 0 && (
-          <Badge variant="outline" className="border-emerald-300/50 text-emerald-700 dark:text-emerald-300">
+          <Badge variant="outline" className="tone-primary">
             {activeFilterCount} filtros activos
           </Badge>
         )}
@@ -56,11 +51,11 @@ export function PublicacionesDataLayout({
           <button
             type="button"
             aria-label="Cerrar filtros"
-            className="absolute inset-0 bg-black/45 backdrop-blur-[1px]"
+            className="animate-fade-in absolute inset-0 bg-black/45 backdrop-blur-[1px]"
             onClick={() => setOpen(false)}
           />
-          <aside className="absolute right-0 top-0 flex h-full w-full max-w-[430px] flex-col border-l border-white/10 bg-background shadow-2xl">
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3 pl-16 sm:pl-4">
+          <aside className="absolute right-0 top-0 flex h-full w-full max-w-[430px] flex-col border-l border-border/70 bg-background shadow-2xl duration-200 animate-in slide-in-from-right">
+            <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-muted/30 px-4 py-3 pl-16 sm:pl-4">
               <div>
                 <p className="text-sm font-semibold">Filtros de busqueda</p>
                 <p className="text-xs text-muted-foreground">Abre y cierra este panel sin perder espacio en la tabla.</p>
