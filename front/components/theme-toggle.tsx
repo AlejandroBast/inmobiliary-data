@@ -37,7 +37,7 @@ export function ThemeToggle() {
       variant="outline"
       size="sm"
       onClick={toggleTheme}
-      className="gap-2 border-slate-200 bg-background/70 hover:bg-slate-50 dark:border-white/10 dark:hover:bg-white/10"
+      className="gap-2 bg-background/70"
     >
       {theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />}
       {theme === "dark" ? "Claro" : "Oscuro"}
