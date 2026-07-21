@@ -132,7 +132,7 @@ function ComparisonImageCarousel({
   }
 
   return (
-    <div className="relative aspect-[16/10] overflow-hidden bg-slate-100 dark:bg-white/5">
+    <div className="relative aspect-[16/10] overflow-hidden bg-muted">
       {image ? (
         <img
           src={thumbSrc(image.src, CAROUSEL_THUMB_WIDTH)}
@@ -502,9 +502,9 @@ export function PublicacionesManagerPro({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="animate-fade-up space-y-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="rounded-lg border border-slate-200/70 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/5">
+        <div className="surface-muted px-4 py-3">
           <p className="text-sm font-semibold">{publicaciones.length} publicaciones encontradas</p>
           <p className="text-xs text-muted-foreground">
             {hasActiveFilters ? "Resultados filtrados desde el servidor." : "Inventario completo listo para analizar."}
@@ -517,7 +517,7 @@ export function PublicacionesManagerPro({
       </div>
 
       {publicaciones.length === 0 ? (
-        <Card className="border-slate-200/70 dark:border-white/10">
+        <Card className="surface-panel">
           <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
             <div className="flex size-12 items-center justify-center rounded-full bg-muted">
               <Building2 className="size-6 text-muted-foreground" />
@@ -539,19 +539,19 @@ export function PublicacionesManagerPro({
           </CardContent>
         </Card>
       ) : (
-        <Card className="border-slate-200/70 bg-card/95 dark:border-white/10 dark:bg-zinc-950/70">
-          <div className="flex flex-col gap-1 border-b bg-slate-50/60 px-4 py-3 dark:bg-white/[0.03] sm:flex-row sm:items-center sm:justify-between">
+        <Card className="surface-panel">
+          <div className="flex flex-col gap-1 border-b border-border/70 bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="font-semibold tracking-tight">Resultados de publicaciones</h2>
               <p className="text-sm text-muted-foreground">Tabla compacta para comparar precio, ubicacion, fuente y caracteristicas.</p>
             </div>
-            <Badge variant="outline" className="border-emerald-200 text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-300">
+            <Badge variant="outline" className="tone-primary">
               Pagina {safePage} de {totalPages} · {publicaciones.length} registros
             </Badge>
           </div>
           <Table className="table-fixed">
               <TableHeader>
-                <TableRow className="bg-slate-100/80 dark:bg-zinc-900">
+                <TableRow className="bg-muted/50 hover:bg-muted/50">
                   <TableHead className="w-14">ID</TableHead>
                   <TableHead className="w-[160px]">Publicacion</TableHead>
                   <TableHead className="w-[110px]">Barrio</TableHead>
@@ -572,14 +572,14 @@ export function PublicacionesManagerPro({
                   <TableRow
                     key={p.id}
                     className={[
-                      "cursor-pointer transition-colors hover:bg-emerald-50/70 dark:hover:bg-emerald-400/10",
+                      "cursor-pointer transition-colors hover:bg-primary/5",
                       linkStatuses[p.id]?.ok === false
-                        ? "border-red-300 bg-red-50/80 hover:bg-red-100/80 dark:border-red-400/40 dark:bg-red-950/35 dark:hover:bg-red-950/50"
+                        ? "border-rose-300/70 bg-rose-50/80 hover:bg-rose-100/70 dark:border-rose-400/30 dark:bg-rose-950/30 dark:hover:bg-rose-950/45"
                         : p.coincidencias?.length
-                          ? "border-amber-300 bg-amber-50/70 hover:bg-amber-100/70 dark:border-amber-400/30 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
+                          ? "border-amber-300/70 bg-amber-50/70 hover:bg-amber-100/60 dark:border-amber-400/25 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
                         : index % 2 === 0
-                          ? "bg-background dark:bg-zinc-950/30"
-                          : "bg-slate-50/45 dark:bg-white/[0.025]",
+                          ? "bg-background"
+                          : "bg-muted/25",
                     ].join(" ")}
                     onClick={() => setDetail(p)}
                   >
@@ -588,7 +588,7 @@ export function PublicacionesManagerPro({
                       <div className="font-medium">{p.tipoInmueble || "Inmueble"}</div>
                       {p.codigoExterno && <div className="text-xs text-muted-foreground">{p.codigoExterno}</div>}
                       {!!p.coincidencias?.length && (
-                        <Badge className="mt-1 gap-1 bg-amber-500 text-white hover:bg-amber-500">
+                        <Badge className="tone-amber mt-1 gap-1 border">
                           <AlertTriangle className="size-3" />
                           {duplicateLabel(p.coincidencias)}
                         </Badge>
@@ -600,7 +600,7 @@ export function PublicacionesManagerPro({
                         {p.ciudad || "Sin ubicacion"}
                       </div>
                       {coordinatesText(p) && (
-                        <Badge variant="outline" className="mt-1 gap-1 border-emerald-200 bg-emerald-50 text-[11px] text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
+                        <Badge variant="outline" className="tone-primary mt-1 gap-1 text-[11px]">
                           <MapPin className="size-3" />
                           GPS
                         </Badge>
@@ -610,16 +610,16 @@ export function PublicacionesManagerPro({
                       {p.fuenteNombre ? <Badge variant="secondary">{p.fuenteNombre}</Badge> : "-"}
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="font-semibold text-emerald-700 dark:text-emerald-200">{formatCOP(p.precio)}</div>
+                      <div className="font-semibold text-primary">{formatCOP(p.precio)}</div>
                       <div className="text-xs text-muted-foreground">{formatCOP(p.administracion)} admin.</div>
                     </TableCell>
                     <TableCell className="text-right">{formatNumber(p.m2, " m2")}</TableCell>
                     <TableCell className="text-right">{formatCOP(p.precioM2)}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1.5">
-                        <Badge variant="outline" className="gap-1 border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"><BedDouble className="size-3" />{p.habitaciones ?? "-"}</Badge>
-                        <Badge variant="outline" className="gap-1 border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"><Bath className="size-3" />{p.banios ?? "-"}</Badge>
-                        <Badge variant="outline" className="gap-1 border-slate-200 bg-white text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"><Car className="size-3" />{p.parqueadero ?? "-"}</Badge>
+                        <Badge variant="outline" className="gap-1"><BedDouble className="size-3" />{p.habitaciones ?? "-"}</Badge>
+                        <Badge variant="outline" className="gap-1"><Bath className="size-3" />{p.banios ?? "-"}</Badge>
+                        <Badge variant="outline" className="gap-1"><Car className="size-3" />{p.parqueadero ?? "-"}</Badge>
                       </div>
                     </TableCell>
                     <TableCell className="text-sm">
@@ -634,12 +634,12 @@ export function PublicacionesManagerPro({
                     </TableCell>
                     <TableCell onClick={(event) => event.stopPropagation()}>
                       <div className="flex flex-wrap justify-end gap-1">
-                        <Button variant="outline" size="sm" onClick={() => setDetail(p)} className="gap-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-400/30 dark:text-emerald-300 dark:hover:bg-emerald-400/10">
+                        <Button variant="outline" size="sm" onClick={() => setDetail(p)} className="gap-1">
                           <Eye className="size-4" />
                           Ver publicacion
                         </Button>
                         {!!p.coincidencias?.length && (
-                          <Button variant="outline" size="sm" onClick={() => void openComparison(p)} className="gap-1 border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-400/30 dark:text-amber-300 dark:hover:bg-amber-400/10">
+                          <Button variant="outline" size="sm" onClick={() => void openComparison(p)} className="tone-amber gap-1 border hover:bg-amber-100 dark:hover:bg-amber-400/15">
                             <Columns3 className="size-4" />
                             Comparar
                           </Button>
@@ -738,25 +738,25 @@ export function PublicacionesManagerPro({
               </DialogHeader>
 
               {!!detail.coincidencias?.length && (
-                <div className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-100">
+                <div className="tone-amber space-y-3 rounded-lg border p-4">
                   <div className="flex items-start gap-2">
-                    <AlertTriangle className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-300" />
+                    <AlertTriangle className="mt-0.5 size-5 shrink-0" />
                     <div>
                       <p className="font-semibold">Esta publicacion puede estar repetida</p>
                       <p className="text-xs opacity-80">El comparador encontro imagenes, ubicacion o caracteristicas coincidentes.</p>
                     </div>
-                    <Button type="button" variant="outline" size="sm" className="ml-auto shrink-0 gap-2 border-amber-300 bg-white/70 text-amber-800 hover:bg-white dark:border-amber-400/30 dark:bg-black/10 dark:text-amber-200" onClick={() => void openComparison(detail)}>
+                    <Button type="button" variant="outline" size="sm" className="ml-auto shrink-0 gap-2 border-amber-300/70 bg-background/70 text-amber-700 hover:bg-background dark:border-amber-400/25 dark:text-amber-300" onClick={() => void openComparison(detail)}>
                       <Columns3 className="size-4" />
                       Comparar todas
                     </Button>
                   </div>
                   <div className="space-y-2">
                     {detail.coincidencias.map((coincidencia) => (
-                      <div key={coincidencia.id} className="flex flex-col gap-2 rounded-md border border-amber-200 bg-white/70 p-3 dark:border-amber-400/20 dark:bg-black/10 sm:flex-row sm:items-center sm:justify-between">
+                      <div key={coincidencia.id} className="flex flex-col gap-2 rounded-md border border-amber-200/70 bg-background/60 p-3 dark:border-amber-400/20 dark:bg-background/30 sm:flex-row sm:items-center sm:justify-between">
                         <div className="text-sm">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="font-semibold">Publicacion #{coincidencia.publicacionRelacionadaId}</span>
-                            <Badge variant="secondary" className="border border-amber-300/70 bg-amber-100 text-amber-950 dark:border-amber-300/20 dark:bg-amber-300/15 dark:text-amber-100">
+                            <Badge variant="secondary" className="tone-amber border">
                               {coincidencia.fuenteRelacionada || "Fuente desconocida"}
                             </Badge>
                             <span>{coincidencia.puntaje}% de coincidencia</span>
@@ -804,10 +804,10 @@ export function PublicacionesManagerPro({
                 <TextBlock label="Descripcion" value={detail.descripcion} />
               )}
 
-              <div className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-4 dark:border-emerald-400/20 dark:bg-emerald-400/10">
+              <div className="tone-primary space-y-3 rounded-lg border p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-center gap-2">
-                    <MapPin className="size-4 text-emerald-700 dark:text-emerald-300" />
+                    <MapPin className="size-4" />
                     <div>
                       <p className="text-sm font-medium">Coordenadas</p>
                       <p className="text-xs text-muted-foreground">{coordinatesText(detail) || "Sin coordenadas capturadas"}</p>
@@ -836,7 +836,7 @@ export function PublicacionesManagerPro({
                 </div>
               </div>
 
-              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+              <div className="surface-muted space-y-3 p-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="text-sm font-medium">Nota personalizada</p>
@@ -882,7 +882,7 @@ export function PublicacionesManagerPro({
                           aria-label={`Eliminar ${image.name}`}
                           disabled={detailImageDeleting !== null}
                           onClick={() => void deleteDetailImage(image)}
-                          className="absolute right-2 top-2 z-10 size-9 rounded-full border-2 border-white bg-red-600 text-white opacity-0 shadow-lg transition hover:bg-red-700 group-hover:opacity-100 focus-visible:opacity-100"
+                          className="absolute right-2 top-2 z-10 size-9 rounded-full border-2 border-white bg-destructive text-white opacity-0 shadow-lg transition hover:bg-destructive/90 group-hover:opacity-100 focus-visible:opacity-100"
                         >
                           {detailImageDeleting === image.name
                             ? <Loader2 className="size-5 animate-spin" />
@@ -933,25 +933,25 @@ export function PublicacionesManagerPro({
                     Ver origen
                   </a>
                   {linksLoading && !linkStatuses[detail.id] && (
-                    <Badge variant="outline" className="gap-1 border-slate-200 text-slate-600 dark:border-white/10 dark:text-slate-300">
+                    <Badge variant="outline" className="tone-slate gap-1">
                       <Loader2 className="size-3 animate-spin" />
                       Validando link
                     </Badge>
                   )}
                   {linkStatuses[detail.id]?.ok === true && (
-                    <Badge variant="outline" className="gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
+                    <Badge variant="outline" className="tone-primary gap-1">
                       <CheckCircle2 className="size-3" />
                       Link disponible
                     </Badge>
                   )}
                   {linkStatuses[detail.id] && linkStatuses[detail.id]?.ok === null && (
-                    <Badge variant="outline" className="gap-1 border-slate-300 bg-slate-50 text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-slate-300">
+                    <Badge variant="outline" className="tone-slate gap-1">
                       <HelpCircle className="size-3" />
                       No verificable (sesion Facebook)
                     </Badge>
                   )}
                   {linkStatuses[detail.id]?.ok === false && (
-                    <Badge variant="outline" className="gap-1 border-red-300 bg-red-50 text-red-700 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-200">
+                    <Badge variant="outline" className="tone-rose gap-1">
                       <AlertTriangle className="size-3" />
                       Link con problema
                     </Badge>
@@ -978,7 +978,7 @@ export function PublicacionesManagerPro({
         <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-6xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Columns3 className="size-5 text-emerald-600" />
+              <Columns3 className="size-5 text-primary" />
               Comparar publicaciones repetidas
             </DialogTitle>
             <DialogDescription>
@@ -997,11 +997,11 @@ export function PublicacionesManagerPro({
                 const images = comparisonImages[item.id] ?? []
                 const isRoot = item.id === comparisonRootId
                 return (
-                  <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm ${isRoot ? "border-emerald-400 ring-2 ring-emerald-400/15" : "border-slate-200 dark:border-white/10"}`}>
+                  <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm transition-shadow ${isRoot ? "border-primary ring-2 ring-primary/15" : "border-border/70 hover:shadow-md"}`}>
                     <ComparisonImageCarousel publicationId={item.id} images={images}>
                       <div className="absolute left-3 top-3 flex flex-wrap gap-2">
-                        <Badge className={isRoot ? "bg-emerald-600 text-white" : "bg-black/70 text-white"}>#{item.id}{isRoot ? " · seleccionada" : ""}</Badge>
-                        {item.estado && <Badge className={item.estado === "confirmada" ? "bg-emerald-600 text-white" : "bg-amber-500 text-white"}>{item.estado}</Badge>}
+                        <Badge className={isRoot ? "bg-primary text-primary-foreground" : "bg-black/70 text-white"}>#{item.id}{isRoot ? " · seleccionada" : ""}</Badge>
+                        {item.estado && <Badge className={item.estado === "confirmada" ? "bg-primary text-primary-foreground" : "bg-amber-500 text-white"}>{item.estado}</Badge>}
                       </div>
                     </ComparisonImageCarousel>
                     <div className="space-y-4 p-4">
@@ -1010,7 +1010,7 @@ export function PublicacionesManagerPro({
                           <h3 className="font-semibold">{item.tipoInmueble || "Inmueble"}</h3>
                           <Badge variant="secondary">{item.fuenteNombre || "Sin fuente"}</Badge>
                         </div>
-                        <p className="mt-2 text-xl font-bold text-emerald-700 dark:text-emerald-300">{formatCOP(item.precio)}</p>
+                        <p className="mt-2 text-xl font-bold text-primary">{formatCOP(item.precio)}</p>
                         {item.puntaje !== null && <p className="mt-1 text-xs text-muted-foreground">{item.puntaje}% de coincidencia · {item.imagenesCoincidentes} imagen(es) idéntica(s)</p>}
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1031,7 +1031,7 @@ export function PublicacionesManagerPro({
                           <Button
                             type="button"
                             variant="outline"
-                            className="w-full gap-2 border-red-300 text-red-700 hover:border-red-400 hover:bg-red-50 hover:text-red-800 dark:border-red-400/30 dark:text-red-300 dark:hover:bg-red-400/10 dark:hover:text-red-200"
+                            className="tone-rose w-full gap-2 border hover:bg-rose-100 dark:hover:bg-rose-400/15"
                             onClick={() => {
                               if (comparisonRootId == null || item.coincidenciaId == null) return
                               setComparisonToDismiss({
@@ -1072,7 +1072,7 @@ export function PublicacionesManagerPro({
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <CircleX className="size-5 text-red-600 dark:text-red-300" />
+              <CircleX className="size-5 text-destructive" />
               Marcar como no repetidas
             </DialogTitle>
             <DialogDescription>
@@ -1136,7 +1136,7 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
 
 function CompareValue({ label, value, className = "" }: { label: string; value: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-slate-200/80 bg-slate-50/70 p-2.5 dark:border-white/10 dark:bg-white/5 ${className}`}>
+    <div className={`surface-muted p-2.5 ${className}`}>
       <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-1 break-words font-medium text-foreground">{value}</p>
     </div>
