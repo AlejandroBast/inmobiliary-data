@@ -200,12 +200,12 @@ export function PublicacionesFiltrosPro({
   }
 
   return (
-    <Card className="border-slate-200/70 bg-card/95 dark:border-white/10 dark:bg-zinc-950/70">
+    <Card className="surface-panel">
       <CardContent className="space-y-5 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
-              <span className="flex size-8 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+              <span className="icon-chip tone-primary">
                 <Filter className="size-4" />
               </span>
               <h2 className="text-base font-semibold tracking-tight">Filtros de busqueda</h2>
@@ -214,10 +214,7 @@ export function PublicacionesFiltrosPro({
               1. Define el segmento, 2. acota precio, 3. aplica para actualizar resultados.
             </p>
           </div>
-          <Badge
-            variant={totalActive > 0 ? "default" : "outline"}
-            className={totalActive > 0 ? "bg-emerald-600 text-white" : ""}
-          >
+          <Badge variant={totalActive > 0 ? "default" : "outline"}>
             {totalActive} filtros activos
           </Badge>
         </div>
@@ -286,7 +283,7 @@ export function PublicacionesFiltrosPro({
               </SelectContent>
             </Select>
             {values.duplicados && values.duplicados !== "all" && (
-              <p className="mt-1 flex items-center gap-1 text-xs text-amber-700 dark:text-amber-300">
+              <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-300">
                 <AlertTriangle className="size-3" />
                 Filtro del comparador activo
               </p>
@@ -438,21 +435,20 @@ export function PublicacionesFiltrosPro({
                 variant={activePreset?.label === preset.label ? "default" : "outline"}
                 size="xs"
                 onClick={() => setPricePreset(preset)}
-                className={activePreset?.label === preset.label ? "bg-emerald-600 text-white hover:bg-emerald-700" : ""}
               >
                 {preset.label}
               </Button>
             ))}
           </div>
-          <div className="rounded-lg border border-slate-200/70 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/60">
+          <div className="surface-muted p-3">
             <div className="mb-2 flex justify-between text-xs text-muted-foreground">
               <span>{formatMillions(sliderMin)}</span>
               <span>{formatMillions(sliderMax)}</span>
             </div>
             <div className="relative h-9">
-              <div className="absolute left-0 right-0 top-3 h-2 rounded-full bg-slate-200 dark:bg-white/10" />
+              <div className="absolute left-0 right-0 top-3 h-2 rounded-full bg-muted-foreground/15" />
               <div
-                className="absolute top-3 h-2 rounded-full bg-emerald-500"
+                className="absolute top-3 h-2 rounded-full bg-primary"
                 style={{
                   left: `${sliderMinPercent}%`,
                   width: `${Math.max(sliderMaxPercent - sliderMinPercent, 0)}%`,
@@ -482,8 +478,8 @@ export function PublicacionesFiltrosPro({
           </div>
         </FilterGroup>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <Button type="button" onClick={applyFilters} className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700">
+        <div className="flex flex-col gap-3 border-t border-border/70 pt-4 sm:flex-row sm:items-center">
+          <Button type="button" onClick={applyFilters} className="gap-2">
             <Filter className="size-4" />
             Aplicar filtros
           </Button>
@@ -506,11 +502,18 @@ function FilterGroup({
   title: string
   children: React.ReactNode
 }) {
+  const match = title.match(/^(\d+)\.\s*(.*)$/)
+  const step = match?.[1]
+  const label = match?.[2] ?? title
+
   return (
-    <section className="space-y-3 rounded-lg border border-slate-200/70 bg-slate-50/70 p-3 dark:border-white/10 dark:bg-zinc-900/60">
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 text-emerald-600 dark:text-emerald-300" />
-        <h3 className="text-sm font-semibold">{title}</h3>
+    <section className="surface-muted space-y-3 p-3.5">
+      <div className="flex items-center gap-2.5">
+        {step ? <span className="step-badge">{step}</span> : <Icon className="size-4 text-primary" />}
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+          {step && <Icon className="size-3.5 text-primary" />}
+          {label}
+        </h3>
       </div>
       <div className="grid gap-3">{children}</div>
     </section>
