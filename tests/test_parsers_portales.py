@@ -46,6 +46,23 @@ def test_fincaraiz_parse_colombian_decimal_distingue_miles_de_decimales():
     assert fincaraiz.parse_colombian_decimal("sin area") is None
 
 
+def test_fincaraiz_ubicacion_estructurada_prefiere_location_main():
+    # location_main es la ubicacion propia de la ficha; neighbourhood es una
+    # lista de barrios cercanos cuyo [0] puede no ser el de la publicacion.
+    html = (
+        '<script id="__NEXT_DATA__">'
+        '{"props":{"pageProps":{"data":{'
+        '"locations":{'
+        '"location_main":{"name":"Torres del cielo 2","location_type":"neighbourhood"},'
+        '"neighbourhood":[{"name":"Villa angela"},{"name":"Maria paz"}]},'
+        '"address":"Torres del Cielo 2, Calle 28, Pasto, Nariño"}}}}'
+        "</script>"
+    )
+    barrio, address = fincaraiz.extract_structured_location(html)
+    assert barrio == "Torres del cielo 2"
+    assert address == "Torres del Cielo 2, Calle 28, Pasto, Nariño"
+
+
 # ==========================================================
 # CIENCUADRAS
 # ==========================================================

@@ -424,6 +424,13 @@ def extract_barrio_from_address(address):
 def extract_structured_location(html):
     data = extract_embedded_property_data(html)
 
+    # location_main es la ubicacion propia de la ficha (autoritativa). El campo
+    # neighbourhood es una lista de barrios cercanos: tomar su [0] podia devolver
+    # un barrio vecino en vez del de la publicacion.
+    main = first_json_value(data, ["locations", "location_main", "name"])
+    if main:
+        return main, first_json_value(data, ["address"])
+
     neighbourhood = first_json_value(data, ["locations", "neighbourhood", "name"])
     if neighbourhood:
         return neighbourhood, first_json_value(data, ["address"])
@@ -1558,6 +1565,14 @@ def extract_publication_data(page, url, fuente_id):
     if location_result.outside_municipality:
         return None, html, "fuera_de_pasto"
     barrio = location_result.value if location_result.accepted else None
+
+    # Cuando la ubicacion propia de la ficha es un conjunto/edificio (Fincaraiz lo
+    # entrega como su "barrio" pero el normalizador lo rechaza como propiedad
+    # horizontal), ese es el nombre real del conjunto: se guarda en el campo ph,
+    # que es su lugar correcto. Es mas fiable que el ph deducido del texto
+    # publicitario de la descripcion.
+    if location_result.kind == "propiedad horizontal" and location_result.original:
+        ph = location_result.original
 
     direccion = direccion or clean_text(", ".join([value for value in [barrio, ciudad or "Pasto", "Nariño"] if value]))
 
