@@ -555,12 +555,12 @@ export function PublicacionesManagerPro({
                   <TableHead className="w-14">ID</TableHead>
                   <TableHead className="w-[160px]">Publicacion</TableHead>
                   <TableHead className="w-[110px]">Barrio</TableHead>
+                  <TableHead className="w-[180px]">PH</TableHead>
                   <TableHead className="w-[90px]">Fuente</TableHead>
                   <TableHead className="w-[130px] text-right">Precio</TableHead>
                   <TableHead className="w-[80px] text-right">Area</TableHead>
                   <TableHead className="w-[90px] text-right">$/m2</TableHead>
                   <TableHead className="w-[110px]">Caracteristicas</TableHead>
-                  <TableHead className="w-[180px]">PH</TableHead>
                   <TableHead className="w-[100px]">Nota</TableHead>
                   <TableHead className="w-[100px]">Captura</TableHead>
                   <TableHead className="w-[180px] text-right">Acciones</TableHead>
@@ -606,6 +606,9 @@ export function PublicacionesManagerPro({
                         </Badge>
                       )}
                     </TableCell>
+                    <TableCell className="text-sm">
+                      <ExpandableText text={phLabel(p.ph)} maxWidth={160} truncateLength={30} />
+                    </TableCell>
                     <TableCell>
                       {p.fuenteNombre ? <Badge variant="secondary">{p.fuenteNombre}</Badge> : "-"}
                     </TableCell>
@@ -621,9 +624,6 @@ export function PublicacionesManagerPro({
                         <Badge variant="outline" className="gap-1"><Bath className="size-3" />{p.banios ?? "-"}</Badge>
                         <Badge variant="outline" className="gap-1"><Car className="size-3" />{p.parqueadero ?? "-"}</Badge>
                       </div>
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      <ExpandableText text={phLabel(p.ph)} maxWidth={160} truncateLength={30} />
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{shortNote(p.notas)}</TableCell>
                     <TableCell>
