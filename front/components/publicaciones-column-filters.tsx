@@ -90,12 +90,12 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
       <th className="p-1">{button("id", "Filtrar")}</th>
       <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1">{button("ubicacion", "Filtrar")}</th>
+      <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1">{button("fuente", "Filtrar")}</th>
       <th className="p-1">{button("precio", "Filtrar")}</th>
       <th className="p-1">{button("area", "Filtrar")}</th>
       <th className="p-1 text-center text-[10px] font-normal text-muted-foreground">Calculado</th>
       <th className="p-1">{button("caracteristicas", "Filtrar")}</th>
-      <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1 text-center text-[10px] font-normal text-muted-foreground">Sin filtro</th>
       <th className="p-1">{button("fecha", "Filtrar")}</th>
       <th className="p-1"><Button type="button" variant="ghost" size="sm" onClick={clearFilters} className="h-7 gap-1 px-2 text-[11px]"><Eraser className="size-3" />Limpiar</Button></th>
