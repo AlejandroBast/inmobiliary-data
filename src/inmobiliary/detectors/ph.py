@@ -1,10 +1,9 @@
 """Deteccion centralizada de Propiedad Horizontal (PH) para los scrapers.
 
-Amorel, Ciencuadras y FincaRaiz cada uno reimplementaba su propia variante de
-"buscar Conjunto/Edificio/Condominio en el texto"; esto junta esa logica en un
-solo lugar para que un sinonimo nuevo de un portal (o un ajuste al detector)
-se enseñe una sola vez. El scraper de Facebook Marketplace NO usa este modulo
-a proposito (fuera de alcance).
+Amorel, Ciencuadras, FincaRaiz y Facebook Marketplace cada uno reimplementaba
+su propia variante de "buscar Conjunto/Edificio/Condominio en el texto"; esto
+junta esa logica en un solo lugar para que un sinonimo nuevo de un portal (o
+un ajuste al detector) se enseñe una sola vez.
 """
 import re
 import unicodedata
