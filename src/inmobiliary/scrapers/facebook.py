@@ -31,6 +31,7 @@ except ImportError:
 from inmobiliary.detectors.duplicates import detect_duplicates_safely
 import inmobiliary.common as common
 from inmobiliary.detectors.location import location_diagnostic, resolve_pasto_location
+from inmobiliary.detectors.ph import detect_ph
 from inmobiliary.net import with_retry
 from inmobiliary.common import (
     clean_text,
@@ -1076,16 +1077,19 @@ def _search_barrio_lines(lines, patterns):
     for raw_line in lines:
         source = normalize_text(raw_line)
         for pattern in patterns:
-            match = re.search(pattern, source)
-            if not match:
-                continue
-            value = re.split(BARRIO_STOP_WORDS, match.group(1))[0]
-            value = clean_text(value)
-            if not value:
-                continue
-            if value.split(" ")[0].upper() in BARRIO_BLOCKLIST:
-                continue
-            return value.title()
+            # re.finditer (no re.search): si la primera coincidencia de la
+            # linea es basura ("en excelente estado", "en conjunto cerrado")
+            # y cae en BARRIO_BLOCKLIST, hay que seguir probando las
+            # coincidencias siguientes de la misma linea (ej. "...en excelente
+            # estado, ubicado en Tamasagra...") en vez de abandonarla entera.
+            for match in re.finditer(pattern, source):
+                value = re.split(BARRIO_STOP_WORDS, match.group(1))[0]
+                value = clean_text(value)
+                if not value:
+                    continue
+                if value.split(" ")[0].upper() in BARRIO_BLOCKLIST:
+                    continue
+                return value.title()
     return None
 
 
@@ -1785,8 +1789,14 @@ def extract_publication_data(page, link):
         print(f"[SKIP] Publicacion parece estar fuera de Pasto: {title}")
         return None, html, [], "fuera_de_pasto"
 
+    # Deteccion de PH: se delega por completo al modulo compartido ph.py (la
+    # misma logica que usan Amorel, Ciencuadras y FincaRaiz), sin nombre de
+    # complejo propio de Facebook: detect_ph ya sabe extraer "Conjunto X" /
+    # "Edificio X" del texto libre cuando no se le pasa complex_name.
+    ph = detect_ph(full_text)
+
     location_result = resolve_pasto_location(
-        barrio, title=title, description=full_text, address=location, city=ciudad
+        barrio, title=title, description=full_text, address=location, city=ciudad, ph=ph
     )
     print(f"[UBICACION] {location_diagnostic(location_result)}")
     if location_result.outside_municipality:
@@ -1804,6 +1814,7 @@ def extract_publication_data(page, link):
         "min_sale_price": MIN_SALE_PRICE,
         "contenido_filtrado": listing_text[:3000],
         "normalizacion_ubicacion": location_diagnostic(location_result),
+        "ph_detectado": ph,
         "area": area_details,
     }
     data = {
@@ -1817,7 +1828,7 @@ def extract_publication_data(page, link):
         "ciudad": ciudad,
         "barrio": barrio,
         "tipo_inmueble": tipo_inmueble,
-        "ph": None,
+        "ph": ph,
         "estrato": extract_count(full_text, [r"ESTRATO\s+([0-9])"]),
         "descripcion": description,
         "precio": price,
