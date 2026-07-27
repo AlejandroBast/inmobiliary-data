@@ -1507,6 +1507,27 @@ def extract_administracion(text):
     return None
 
 
+ANTIGUEDAD_PATTERN = re.compile(
+    r"\b([0-9]+\s*(?:A[ÑN]OS?)?\s*DE\s*CONSTRUID[OA]|[0-9]+\s*A[ÑN]OS?\s*DE\s*ANTIGUEDAD|"
+    r"A\s*ESTRENAR|PARA\s*ESTRENAR|OBRA\s*GRIS|OBRA\s*NEGRA|SOBRE\s*PLANOS|"
+    r"RECI[EÉ]N\s*CONSTRUID[OA]|CONSTRUCCI[OÓ]N\s*NUEVA|NUEVA?\s*CONSTRUCCI[OÓ]N)\b"
+)
+
+
+def extract_antiguedad(text):
+    # Facebook nunca trae un campo estructurado de antiguedad (a diferencia de
+    # los portales): antes esto quedaba siempre en None sin siquiera
+    # intentarlo. La señal en texto libre es escasa pero real ("a estrenar",
+    # "obra gris", "X años de construida"). Se guarda en el mismo estilo que
+    # el resto de campos de texto libre de este scraper: normalizado y en
+    # Title Case (ver extract_barrio), sin tildes.
+    source = normalize_text(text)
+    match = ANTIGUEDAD_PATTERN.search(source)
+    if not match:
+        return None
+    return clean_text(match.group(1)).title()
+
+
 def extract_location(body_text):
     lines = get_lines(body_text)
     for line in lines:
@@ -1834,7 +1855,7 @@ def extract_publication_data(page, link):
         "precio": price,
         "m2": area_details["lot_area_m2"] if area_details["lot_area_m2"] is not None else area_details["built_area_m2"],
         "m2_construido": area_details["built_area_m2"],
-        "antiguedad": None,
+        "antiguedad": extract_antiguedad(full_text),
         "pisos": extract_pisos(full_text),
         "habitaciones": extract_count(
             full_text,
