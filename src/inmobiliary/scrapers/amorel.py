@@ -809,6 +809,26 @@ def extract_area(text):
     return None
 
 
+def extract_built_area(text):
+    """Area construida, cuando el aviso la distingue explicitamente del area
+    de lote/terreno (ej. "Area construida: 120 m2", "80 m2 construidos").
+    Antes m2_construido quedaba siempre en None porque nadie la intentaba
+    extraer, aunque una minoria de avisos si la menciona por separado."""
+    source = normalize_text(text or "")
+    patterns = [
+        r"AREA\s+(?:CONSTRUIDA|PRIVADA)\s*(?:DE|:)?\s*(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS)?",
+        r"(\d+(?:[\.,]\d+)?)\s*(?:M2|MTS|METROS)\s+CONSTRUIDOS?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, source)
+        if match:
+            try:
+                return float(match.group(1).replace(",", "."))
+            except ValueError:
+                continue
+    return None
+
+
 def extract_count(text, patterns):
     source = normalize_text(text or "")
     for pattern in patterns:
@@ -1024,7 +1044,7 @@ def extract_publication_data(url, tipo_hint=None):
         "descripcion": description or clean_text(text),
         "precio": price,
         "m2": extract_area(full_detail_text),
-        "m2_construido": None,
+        "m2_construido": extract_built_area(full_detail_text),
         "antiguedad": extract_antiguedad(full_detail_text),
         "pisos": extract_pisos_totales(full_detail_text),
         "habitaciones": extract_habitaciones(full_detail_text),
