@@ -229,6 +229,32 @@ function rowLinks(publicacion: Row) {
   }
 }
 
+// Algunas filas importadas del Excel del cliente traen en link_origen un
+// nombre de contacto o telefono en vez de una URL real (visitas de campo sin
+// anuncio online). Sin esta guarda, <a href> los trata como ruta relativa y
+// termina abriendo localhost/<ese texto> en vez de la publicacion original.
+function isRealUrl(value?: string | null) {
+  return !!value && /^https?:\/\//i.test(value)
+}
+
+type PersistedLinkCheck = { ok: boolean | null; detalle?: string; verificado_en?: string }
+
+// Resultado guardado por scripts/check_and_persist_link_status.py dentro de
+// links_adicionales.link_check. Permite pintar filas caidas de entrada, sin
+// esperar el chequeo en vivo del navegador (que ademas solo cubre la pagina
+// visible y tarda unos segundos en resolver).
+function persistedLinkCheck(publicacion: Row): PersistedLinkCheck | null {
+  const raw = publicacion.linksAdicionales
+  const check = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check : null
+  if (!check || typeof check !== "object") return null
+  const value = check as Record<string, unknown>
+  return {
+    ok: typeof value.ok === "boolean" ? value.ok : null,
+    detalle: typeof value.detalle === "string" ? value.detalle : undefined,
+    verificado_en: typeof value.verificado_en === "string" ? value.verificado_en : undefined,
+  }
+}
+
 function duplicateLabel(coincidencias: CoincidenciaPublicacion[]) {
   const confirmed = coincidencias.filter((item) => item.estado === "confirmada").length
   if (confirmed) return `${confirmed} repetida${confirmed === 1 ? "" : "s"}`
@@ -573,7 +599,10 @@ export function PublicacionesManagerPro({
                     key={p.id}
                     className={[
                       "cursor-pointer transition-colors hover:bg-primary/5",
-                      linkStatuses[p.id]?.ok === false
+                      // El chequeo en vivo (linkStatuses) manda cuando ya corrio para esta
+                      // fila; si todavia no, se usa el resultado persistido por
+                      // check_and_persist_link_status.py para no depender de esperar.
+                      (linkStatuses[p.id]?.ok ?? persistedLinkCheck(p)?.ok) === false
                         ? "border-rose-300/70 bg-rose-50/80 hover:bg-rose-100/70 dark:border-rose-400/30 dark:bg-rose-950/30 dark:hover:bg-rose-950/45"
                         : p.coincidencias?.length
                           ? "border-amber-300/70 bg-amber-50/70 hover:bg-amber-100/60 dark:border-amber-400/25 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
@@ -928,34 +957,60 @@ export function PublicacionesManagerPro({
 
               <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
-                  <a href={detail.linkOrigen} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
-                    <ExternalLink className="size-4" />
-                    Ver origen
-                  </a>
-                  {linksLoading && !linkStatuses[detail.id] && (
-                    <Badge variant="outline" className="tone-slate gap-1">
-                      <Loader2 className="size-3 animate-spin" />
-                      Validando link
-                    </Badge>
+                  {isRealUrl(detail.linkOrigen) ? (
+                    <a href={detail.linkOrigen} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-sm text-primary hover:underline">
+                      <ExternalLink className="size-4" />
+                      Ver origen
+                    </a>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+                      <HelpCircle className="size-4" />
+                      Sin link online (ver notas)
+                    </span>
                   )}
-                  {linkStatuses[detail.id]?.ok === true && (
-                    <Badge variant="outline" className="tone-primary gap-1">
-                      <CheckCircle2 className="size-3" />
-                      Link disponible
-                    </Badge>
-                  )}
-                  {linkStatuses[detail.id] && linkStatuses[detail.id]?.ok === null && (
-                    <Badge variant="outline" className="tone-slate gap-1">
-                      <HelpCircle className="size-3" />
-                      No verificable (sesion Facebook)
-                    </Badge>
-                  )}
-                  {linkStatuses[detail.id]?.ok === false && (
-                    <Badge variant="outline" className="tone-rose gap-1">
-                      <AlertTriangle className="size-3" />
-                      Link con problema
-                    </Badge>
-                  )}
+                  {(() => {
+                    const persisted = persistedLinkCheck(detail)
+                    const liveStatus = linkStatuses[detail.id]
+                    // El chequeo en vivo manda apenas resuelve; mientras tanto se
+                    // muestra el resultado persistido (si existe) en vez de un
+                    // simple "validando" sin informacion.
+                    const ok = liveStatus ? liveStatus.ok : (persisted?.ok ?? null)
+                    const isLive = Boolean(liveStatus)
+
+                    if (linksLoading && !liveStatus && !persisted) {
+                      return (
+                        <Badge variant="outline" className="tone-slate gap-1">
+                          <Loader2 className="size-3 animate-spin" />
+                          Validando link
+                        </Badge>
+                      )
+                    }
+
+                    if (ok === true) {
+                      return (
+                        <Badge variant="outline" className="tone-primary gap-1">
+                          <CheckCircle2 className="size-3" />
+                          Link disponible
+                        </Badge>
+                      )
+                    }
+
+                    if (ok === false) {
+                      return (
+                        <Badge variant="outline" className="tone-rose gap-1">
+                          <AlertTriangle className="size-3" />
+                          Link caido{!isLive && persisted?.verificado_en ? ` (verificado ${formatDate(persisted.verificado_en)})` : ""}
+                        </Badge>
+                      )
+                    }
+
+                    return (
+                      <Badge variant="outline" className="tone-slate gap-1">
+                        <HelpCircle className="size-3" />
+                        No verificable (sesion Facebook)
+                      </Badge>
+                    )
+                  })()}
                 </div>
                 <Button variant="outline" onClick={() => { const selected = detail; setDetail(null); openEdit(selected) }}>
                   Editar
@@ -1045,9 +1100,15 @@ export function PublicacionesManagerPro({
                             No es repetida
                           </Button>
                         )}
-                        <Button type="button" variant="outline" className="w-full gap-2" onClick={() => window.open(item.linkOrigen, "_blank", "noopener,noreferrer")}>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="w-full gap-2"
+                          disabled={!isRealUrl(item.linkOrigen)}
+                          onClick={() => window.open(item.linkOrigen, "_blank", "noopener,noreferrer")}
+                        >
                           <ExternalLink className="size-4" />
-                          Abrir publicación original
+                          {isRealUrl(item.linkOrigen) ? "Abrir publicación original" : "Sin link online"}
                         </Button>
                       </div>
                     </div>
