@@ -95,6 +95,19 @@ def test_ciencuadras_lee_el_contador_de_resultados():
     assert ciencuadras.extract_total_results("sin resultados aun") is None
 
 
+def test_ciencuadras_pisos_exige_plural_para_no_confundir_con_ubicacion():
+    # "5 piso"/"segundo piso" describen en que piso queda la unidad, no
+    # cuantos pisos tiene el inmueble.
+    assert ciencuadras.extract_pisos("5 piso sin ascensor") is None
+    assert ciencuadras.extract_pisos("ubicado en el segundo piso del Edificio") is None
+
+
+def test_ciencuadras_pisos_acepta_plural_en_digitos_y_en_palabras():
+    assert ciencuadras.extract_pisos("Casa de 3 pisos con un total de 10 habitaciones") == 3
+    assert ciencuadras.extract_pisos("Espectacular casa de 180 mt2, de tres pisos") == 3
+    assert ciencuadras.extract_pisos("Venta de casa de dos pisos independientes") == 2
+
+
 # ==========================================================
 # METROCUADRADO
 # ==========================================================
@@ -110,6 +123,34 @@ def test_metrocuadrado_saca_el_codigo_de_la_url():
 
 def test_metrocuadrado_detecta_el_tipo_en_el_titulo():
     assert metrocuadrado.extract_tipo("Casa en venta en Pasto", "") == "Casa"
+
+
+def test_metrocuadrado_estrato_usa_la_clave_stratum_no_estrato():
+    # El JSON embebido del sitio usa "stratum"; "estrato" nunca aparece como
+    # clave real y antes dejaba este campo en NULL el 100% de las veces.
+    source = '{"stratum":"4","estrato":"9"}'
+    assert metrocuadrado.parse_int(
+        metrocuadrado.regex_value(source, r'"stratum"\s*:\s*"?(\d+)"?')
+    ) == 4
+
+
+def test_metrocuadrado_administracion_desde_adminprice():
+    source = '{"adminPrice":250000}'
+    admin = metrocuadrado.parse_int(
+        metrocuadrado.regex_value(source, r'"adminPrice"\s*:\s*(\d+)')
+    ) or None
+    assert admin == 250000
+
+    source_null = '{"adminPrice":null}'
+    admin_null = metrocuadrado.parse_int(
+        metrocuadrado.regex_value(source_null, r'"adminPrice"\s*:\s*(\d+)')
+    ) or None
+    assert admin_null is None
+
+
+def test_metrocuadrado_antiguedad_prefiere_builttime():
+    source = '{"builtTime":"Entre 0 y 5 anos"}'
+    assert metrocuadrado.regex_value(source, r'"builtTime"\s*:\s*"([^"]+)"') == "Entre 0 y 5 anos"
 
 
 # ==========================================================
@@ -148,6 +189,14 @@ def test_amorel_saca_el_id_de_la_url():
     assert amorel.extract_publication_id(url) == "4521"
 
 
+def test_amorel_extrae_area_construida_por_separado_del_area_de_lote():
+    # Antes m2_construido quedaba siempre en None: nadie la intentaba extraer
+    # aunque el aviso la distinga explicitamente del area de lote/terreno.
+    assert amorel.extract_built_area("AREA CONSTRUIDA: 200 METROS CUADRADOS") == 200.0
+    assert amorel.extract_built_area("80 m2 construidos") == 80.0
+    assert amorel.extract_built_area("3 HABITACIONES, BAÑO, COMEDOR") is None
+
+
 # ==========================================================
 # FACEBOOK MARKETPLACE
 # ==========================================================
@@ -182,3 +231,11 @@ def test_facebook_acepta_venta_y_rechaza_arriendo():
 
 def test_facebook_detecta_tipo_de_inmueble():
     assert facebook.extract_property_type("Casa grande", "") == "Casa"
+
+
+def test_facebook_extrae_antiguedad_de_frases_comunes():
+    # Antes este campo quedaba siempre en None: Facebook es el unico scraper
+    # que nunca lo intentaba extraer.
+    assert facebook.extract_antiguedad("Apartamento para estrenar en Chapal") == "Para Estrenar"
+    assert facebook.extract_antiguedad("Apartamento en obra gris, ubicado en Barrio Alta") == "Obra Gris"
+    assert facebook.extract_antiguedad("Casa amplia con jardin y garaje") is None
