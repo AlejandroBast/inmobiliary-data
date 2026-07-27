@@ -570,9 +570,23 @@ def extract_publication_data(page, url, fuente_id):
     habitaciones = parse_int(regex_value(source, r'"rooms"\s*:\s*"?(\d+)"?'))
     banios = parse_int(regex_value(source, r'"bathrooms"\s*:\s*"?(\d+)"?'))
     parqueadero = parse_int(regex_value(source, r'"garages"\s*:\s*"?(\d+)"?'))
-    estrato = parse_int(regex_value(source, r'"estrato"\s*:\s*"?(\d+)"?'))
-    antiguedad = regex_value(text, r"Antig[üu]edad:\s*([^\n\r]+)")
+    # El JSON embebido usa la clave "stratum", no "estrato": con la clave vieja
+    # esrato quedaba en NULL el 100% de las veces (verificado contra evidencias
+    # guardadas). "estrato" nunca aparece como clave real en el HTML del sitio.
+    estrato = parse_int(regex_value(source, r'"stratum"\s*:\s*"?(\d+)"?'))
+    # "builtTime" es la fuente estructurada del sitio para antigüedad (ej.
+    # "Entre 0 y 5 años", "Más de 20 años"); mucho mas confiable que el texto
+    # libre, que no siempre trae la etiqueta "Antigüedad:" visible.
+    antiguedad = (
+        regex_value(source, r'"builtTime"\s*:\s*"([^"]+)"')
+        or regex_value(text, r"Antig[üu]edad:\s*([^\n\r]+)")
+    )
     pisos = parse_int(regex_value(text, r"N[uú]mero de piso\s+(\d+)"))
+    # "adminPrice" es la cuota de administracion en el JSON embebido; antes
+    # nunca se intentaba extraer y el campo quedaba en NULL el 100% de las
+    # veces (verificado contra evidencias guardadas). 0/null significan que el
+    # sitio no reporto un valor, igual que en los demas portales.
+    administracion = parse_int(regex_value(source, r'"adminPrice"\s*:\s*(\d+)')) or None
 
     image_urls = extract_image_urls(source)
 
@@ -599,7 +613,7 @@ def extract_publication_data(page, url, fuente_id):
         "habitaciones": habitaciones,
         "banios": banios,
         "parqueadero": parqueadero,
-        "administracion": None,
+        "administracion": administracion,
         "notas": None,
     }
 
