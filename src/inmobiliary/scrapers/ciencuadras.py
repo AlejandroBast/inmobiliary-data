@@ -412,17 +412,35 @@ def extract_ph(description):
     return detect_ph(description)
 
 
+SPANISH_SMALL_NUMBERS = {
+    "un": 1, "una": 1, "uno": 1, "dos": 2, "tres": 3, "cuatro": 4,
+    "cinco": 5, "seis": 6, "siete": 7, "ocho": 8, "nueve": 9, "diez": 10,
+}
+
+
 def extract_pisos(description):
     if not description:
         return None
 
-    match = re.search(
-        r"(\d+)\s*(pisos|piso|niveles|nivel)",
-        description,
-        re.IGNORECASE
-    )
+    # Exige plural (pisos/niveles): "5° piso" o "segundo piso" describen en
+    # que piso queda la unidad, no cuantos pisos tiene el inmueble. Usar
+    # singular aca los confundia con la cantidad total (ej. un apartamento en
+    # el 5° piso de un edificio de 10 no tiene "5 pisos").
+    match = re.search(r"(\d+)\s*(pisos|niveles)", description, re.IGNORECASE)
 
-    return int(match.group(1)) if match else None
+    if match:
+        return int(match.group(1))
+
+    # "Casa de tres pisos" / "casa de dos pisos": el sitio tambien deja el
+    # numero en palabras, y antes esto quedaba en None porque solo se
+    # aceptaban digitos.
+    words = "|".join(SPANISH_SMALL_NUMBERS)
+    match = re.search(rf"\b({words})\s+pisos\b", description, re.IGNORECASE)
+
+    if match:
+        return SPANISH_SMALL_NUMBERS.get(match.group(1).lower())
+
+    return None
 
 
 def extract_administracion(text):
