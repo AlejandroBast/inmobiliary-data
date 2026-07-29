@@ -1,5 +1,8 @@
+import { logout } from "@/app/actions/auth"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { LogOut } from "lucide-react"
 import type { ReactNode } from "react"
 
 type AppShellProps = {
@@ -42,6 +45,11 @@ export function AppShell({ active, title, subtitle, icon, actions, children }: A
           <div className="flex flex-wrap items-center gap-2">
             {actions}
             <ThemeToggle />
+            <form action={logout}>
+              <Button type="submit" variant="outline" size="icon" title="Cerrar sesión">
+                <LogOut className="size-4" />
+              </Button>
+            </form>
           </div>
         </div>
         <div className="header-accent-bar h-[2px] w-full" aria-hidden />
