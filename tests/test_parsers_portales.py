@@ -63,6 +63,41 @@ def test_fincaraiz_ubicacion_estructurada_prefiere_location_main():
     assert address == "Torres del Cielo 2, Calle 28, Pasto, Nariño"
 
 
+def test_fincaraiz_acepta_fotos_del_cdn_nuevo_de_cloudfront():
+    # Confirmado con evidencia real (publicacion 3227, 2026-07-28): Fincaraiz
+    # esta migrando fotos a este CDN, y el filtro viejo (solo /repo/img/) las
+    # descartaba todas, dejando la publicacion sin ninguna imagen.
+    items = [
+        {
+            "url": (
+                "https://d3s5pkt10pk3ga.cloudfront.net/resizedImages/742x400/site/"
+                "fincaraiz_service/media/listing/f699e06f-db4a-49ee-820c-304ce22aeabb/"
+                "photos/f699e06f-db4a-49ee-820c-304ce22aeabb_1_True_b17882fa-79ae-4fe2-8ce0-dec4c3b736a6.jpg"
+            ),
+            "width": 742,
+            "height": 400,
+        },
+        # Miniatura lateral de otra foto: resolucion chica, pero es una foto
+        # real (photos/.../_2_...), no un icono de UI. No debe descartarse
+        # por tamaño como si viniera del CDN viejo.
+        {
+            "url": (
+                "https://d3s5pkt10pk3ga.cloudfront.net/resizedImages/1x210/site/"
+                "fincaraiz_service/media/listing/f699e06f-db4a-49ee-820c-304ce22aeabb/"
+                "photos/f699e06f-db4a-49ee-820c-304ce22aeabb_2_False_9136075a-580e-47e8-986f-d58bde6c1f7c.jpg"
+            ),
+            "width": 1,
+            "height": 210,
+        },
+        {"url": "https://cdn1.infocasas.com.uy/web/CO.png", "width": 24, "height": 20},
+    ]
+
+    result = fincaraiz.normalize_image_urls(items)
+
+    assert len(result) == 2
+    assert all("cloudfront.net/resizedImages" in url for url in result)
+
+
 # ==========================================================
 # CIENCUADRAS
 # ==========================================================
