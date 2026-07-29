@@ -952,11 +952,33 @@ containers => {
 """
 
 
+# Fincaraiz esta migrando las fotos al CDN de CloudFront: confirmado con
+# evidencia real (publicacion 3227, 2026-07-28) que ya no trae ninguna foto
+# bajo /repo/img/, solo bajo este dominio. Las URLs tienen la forma
+# .../resizedImages/{ancho}x{alto}/site/fincaraiz_service/media/listing/
+# {uuid_listado}/photos/{uuid_listado}_{indice}_{bool}_{uuid_foto}.jpg
+NEW_PHOTO_CDN_HOST = "cloudfront.net/resizedimages/"
+NEW_PHOTO_CDN_ID_PATTERN = re.compile(r"/photos/[^/?#]*?_(\d+)_(?:true|false)_([^/?#]+?)\.[a-z0-9]+$", re.IGNORECASE)
+
+
+def is_new_cdn_photo(lower_url):
+    return NEW_PHOTO_CDN_HOST in lower_url and "/media/listing/" in lower_url
+
+
 def image_identity(image_url):
     match = re.search(r"_infocdn__([^/?#]+)", image_url, re.IGNORECASE)
 
     if match:
         return match.group(1).lower()
+
+    # En el CDN nuevo, el mismo uuid de foto puede repetirse en distintas
+    # resoluciones (ej. portada grande + miniatura lateral). Identificar por
+    # el uuid de la foto (no por la URL completa) evita guardar la miniatura
+    # y la version grande como si fueran dos fotos distintas.
+    new_cdn_match = NEW_PHOTO_CDN_ID_PATTERN.search(image_url)
+
+    if new_cdn_match:
+        return new_cdn_match.group(2).lower()
 
     return image_url.lower()
 
@@ -1023,8 +1045,12 @@ def normalize_image_urls(image_items):
         if lower.startswith("data:"):
             continue
 
-        # Las fotos reales de la publicación siempre vienen de este path del CDN.
-        if "/repo/img/" not in lower:
+        # Las fotos reales de la publicación vienen de uno de estos dos CDN
+        # (el viejo /repo/img/ o el nuevo de CloudFront al que Fincaraiz esta
+        # migrando; ver comentario en image_identity).
+        from_new_cdn = is_new_cdn_photo(lower)
+
+        if "/repo/img/" not in lower and not from_new_cdn:
             continue
 
         if any(blocked in lower for blocked in [
@@ -1044,9 +1070,12 @@ def normalize_image_urls(image_items):
 
         # Filtro por tamaño: descarta íconos/miniaturas de UI que se hayan
         # colado aunque vengan del mismo CDN (ej. thumbnails muy pequeños).
+        # No aplica al CDN nuevo: ahi la ruta /media/listing/.../photos/ ya
+        # garantiza que es una foto real del listado, aunque el sitio la pida
+        # en una resolucion chica (ej. la miniatura lateral de una portada).
         resolution_score = image_resolution_score(image_url, width, height)
 
-        if resolution_score and resolution_score < MIN_PHOTO_AREA:
+        if not from_new_cdn and resolution_score and resolution_score < MIN_PHOTO_AREA:
             continue
 
         identity = image_identity(image_url)
