@@ -16,10 +16,15 @@ BATCH_SIZE = int(os.getenv("DUPLICATE_BACKFILL_BATCH_SIZE", "100"))
 
 
 def reset_automatic_results(connection):
-    """Elimina solo resultados derivados; nunca publicaciones ni evidencias."""
+    """Elimina solo resultados derivados; nunca publicaciones ni evidencias.
+
+    Respeta las decisiones tomadas a mano: las coincidencias confirmadas y las
+    descartadas se conservan. Antes solo se salvaban las descartadas, asi que un
+    --rebuild borraba las confirmaciones y habia que revisarlas de nuevo.
+    """
     cursor = connection.cursor()
-    cursor.execute("DELETE FROM inmuebles_detectados")
-    cursor.execute("DELETE FROM coincidencias_publicaciones WHERE estado <> 'descartada'")
+    cursor.execute("DELETE FROM inmuebles_detectados WHERE estado = 'automatico'")
+    cursor.execute("DELETE FROM coincidencias_publicaciones WHERE estado = 'pendiente'")
     connection.commit()
     cursor.close()
 
