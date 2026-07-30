@@ -71,7 +71,7 @@ IGNORED_HEADERS = {
     "metraje de frente por metraje de fondo", "material de estructuras",
     "fecha de construccion", "estado de conservacion", "uso de suelo",
     "nivel sobre o bajo la via", "pendiente", "antiguedad barrio",
-    "1 a 5 estrellas", "fecha no disponible", "no",
+    "1 a 5 estrellas", "fecha no disponible", "no", "precio m2 constru",
 }
 
 KNOWN_PORTAL_DOMAINS = [
