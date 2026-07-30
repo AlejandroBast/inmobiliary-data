@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useState, useTransition } from "react"
+import { useEffect, useMemo, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -62,6 +62,16 @@ export function PublicacionForm({
 
   const [isPending, startTransition] = useTransition()
   const [fuenteList, setFuenteList] = useState<Fuente[]>(fuentes)
+  // Fuente para lo que se carga a mano: el cliente anota inmuebles que vio en
+  // cualquier lado y no tiene por que elegir un portal. Se prefiere una llamada
+  // "Cliente", si no cualquiera de tipo manual, y como ultimo recurso la primera.
+  const defaultFuenteId = useMemo(() => {
+    const manual =
+      fuenteList.find((f) => f.nombre?.toLowerCase() === "cliente") ??
+      fuenteList.find((f) => f.tipoFuente?.toLowerCase() === "manual") ??
+      fuenteList[0]
+    return manual ? String(manual.id) : ""
+  }, [fuenteList])
   const [fuenteId, setFuenteId] = useState<string>(editing ? String(editing.fuenteId) : "")
   const [barrio, setBarrio] = useState<string>(editing ? val("barrio") : "")
   const [tipoInmueble, setTipoInmueble] = useState<string>(editing ? val("tipoInmueble") : "")
@@ -123,10 +133,10 @@ export function PublicacionForm({
     e.preventDefault()
     const fd = new FormData(e.currentTarget)
 
-    if (!fuenteId) {
-      toast.error("Selecciona una fuente inmobiliaria.")
-      return
-    }
+    // La fuente es opcional (migracion 005). Si el usuario no eligio ninguna se
+    // intenta la de carga manual, y si tampoco existe se guarda sin fuente. Nunca
+    // bloquea el alta: el cliente carga inmuebles que vio en cualquier lado.
+    const fuenteElegida = fuenteId || defaultFuenteId
 
     const num = (k: string) => {
       const v = fd.get(k)?.toString().trim()
@@ -139,9 +149,10 @@ export function PublicacionForm({
     const linksRaw = fd.get("linksAdicionales")?.toString().trim()
 
     const input: PublicacionInput = {
-      fuenteId: Number(fuenteId),
+      // Nunca 0: Number("") da 0 y eso es lo que rompia la clave foranea.
+      fuenteId: fuenteElegida ? Number(fuenteElegida) : null,
       codigoExterno: str("codigoExterno"),
-      linkOrigen: fd.get("linkOrigen")!.toString().trim(),
+      linkOrigen: str("linkOrigen"),
       linksAdicionales: linksRaw
         ? linksRaw.split("\n").map((l) => l.trim()).filter(Boolean)
         : null,
@@ -155,7 +166,7 @@ export function PublicacionForm({
       ph: str("ph"),
       estrato: num("estrato"),
       descripcion: str("descripcion"),
-      precio: Number(fd.get("precio")),
+      precio: num("precio"),
       m2: str("m2"),
       m2Construido: str("m2Construido"),
       antiguedad: str("antiguedad"),
@@ -205,7 +216,7 @@ export function PublicacionForm({
             <legend className="text-sm font-medium text-muted-foreground">Origen</legend>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label>Fuente inmobiliaria *</Label>
+                <Label>Fuente inmobiliaria</Label>
                 <div className="flex gap-2">
                   <Select value={fuenteId} onValueChange={(v) => setFuenteId(v ?? "")}>
                     <SelectTrigger className="flex-1">
@@ -239,8 +250,8 @@ export function PublicacionForm({
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="linkOrigen">Link de origen *</Label>
-              <Input id="linkOrigen" name="linkOrigen" type="url" required defaultValue={val("linkOrigen")} placeholder="https://..." />
+              <Label htmlFor="linkOrigen">Link de origen</Label>
+              <Input id="linkOrigen" name="linkOrigen" type="url" defaultValue={val("linkOrigen")} placeholder="https://... (opcional)" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="linksAdicionales">Links adicionales (uno por línea)</Label>
@@ -367,8 +378,8 @@ export function PublicacionForm({
             <legend className="text-sm font-medium text-muted-foreground">Precios y áreas</legend>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="precio">Precio (COP) *</Label>
-                <Input id="precio" name="precio" type="number" min="1" required defaultValue={val("precio")} />
+                <Label htmlFor="precio">Precio (COP)</Label>
+                <Input id="precio" name="precio" type="number" min="1" defaultValue={val("precio")} placeholder="Opcional" />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="administracion">Administración (COP)</Label>
