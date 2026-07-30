@@ -28,9 +28,11 @@ export type PublicacionFilters = {
 }
 
 export type PublicacionInput = {
-  fuenteId: number
+  fuenteId?: number | null
   codigoExterno?: string | null
-  linkOrigen: string
+  // Carga manual: el cliente anota inmuebles que vio en cualquier lado, sin link
+  // publicado ni precio cerrado. Ver migracion 004.
+  linkOrigen?: string | null
   linksAdicionales?: string[] | null
   coordenadas?: string | null
   latitud?: string | null
@@ -42,7 +44,7 @@ export type PublicacionInput = {
   ph?: string | null
   estrato?: number | null
   descripcion?: string | null
-  precio: number
+  precio?: number | null
   m2?: string | null
   m2Construido?: string | null
   antiguedad?: string | null
@@ -1053,9 +1055,12 @@ async function toValues(input: PublicacionInput) {
   }
 
   return {
-    fuenteId: input.fuenteId,
+    // Sin fuente se guarda NULL. Antes un formulario sin fuente mandaba 0, que
+    // no existe en fuentes_inmobiliarias, y la clave foranea lo rechazaba con
+    // "La fuente seleccionada no es válida" aunque el usuario no hubiera errado.
+    fuenteId: input.fuenteId ? Number(input.fuenteId) : null,
     codigoExterno: input.codigoExterno || null,
-    linkOrigen: input.linkOrigen,
+    linkOrigen: input.linkOrigen?.trim() || null,
     linksAdicionales: input.linksAdicionales && input.linksAdicionales.length > 0 ? input.linksAdicionales : null,
     coordenadas: input.coordenadas || null,
     latitud: input.latitud || null,
@@ -1067,7 +1072,9 @@ async function toValues(input: PublicacionInput) {
     ph: input.ph || null,
     estrato: input.estrato ?? null,
     descripcion: input.descripcion || null,
-    precio: String(input.precio),
+    // Sin precio se guarda NULL, no "0": un 0 se leeria como precio real y
+    // ademas choca contra el CHECK chk_precio.
+    precio: input.precio === null || input.precio === undefined ? null : String(input.precio),
     m2: input.m2 || null,
     m2Construido: input.m2Construido || null,
     antiguedad: input.antiguedad || null,
