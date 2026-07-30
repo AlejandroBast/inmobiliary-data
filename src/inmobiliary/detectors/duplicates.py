@@ -34,6 +34,18 @@ REVIEW_THRESHOLD = float(os.getenv("DUPLICATE_REVIEW_THRESHOLD", "60"))
 MAX_DISTANCE_METERS = float(os.getenv("DUPLICATE_MAX_DISTANCE_METERS", "100"))
 MIN_IMAGE_WIDTH = int(os.getenv("DUPLICATE_MIN_IMAGE_WIDTH", "200"))
 MIN_IMAGE_HEIGHT = int(os.getenv("DUPLICATE_MIN_IMAGE_HEIGHT", "150"))
+# Distancia dHash maxima para considerar que dos fotos son la misma imagen.
+# El SHA-256 exacto solo, que era el unico criterio, no reconoce una foto
+# reSubida: Facebook la recomprime y el hash cambia por completo. Sobre datos
+# reales la separacion es tajante: los pares del mismo inmueble dieron distancia
+# 0 y todos los demas 16 o mas, sin nada en el medio. En 0 se exige identidad
+# perceptual estricta; subirlo de ~10 empieza a unir fotos apenas parecidas.
+PERCEPTUAL_MAX_DISTANCE = int(os.getenv("DUPLICATE_PERCEPTUAL_MAX_DISTANCE", "6"))
+# Diferencia relativa de precio a partir de la cual dos avisos se consideran de
+# inmuebles distintos. El mismo inmueble reSubido conserva el precio o lo mueve
+# poco; un 30% de brecha ya es otro inmueble, aunque compartan fotos (un mismo
+# vendedor suele reusar fotos del edificio entre unidades distintas).
+PRICE_MAX_DIFFERENCE = float(os.getenv("DUPLICATE_PRICE_MAX_DIFFERENCE", "0.30"))
 
 
 def normalize_text(value):
@@ -51,6 +63,23 @@ def normalize_text(value):
     for pattern, replacement in replacements.items():
         value = re.sub(pattern, replacement, value)
     return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+# Una direccion solo identifica un inmueble si baja a nivel de calle. Varios
+# scrapers arman `direccion` como "<barrio>, <ciudad>, <departamento>", con lo
+# que dos inmuebles distintos del mismo barrio traen exactamente la misma cadena:
+# puntuarla como "misma direccion" repetia lo que ya cubren same_neighborhood y
+# same_city, y alcanzaba para cruzar el umbral de revision sin ninguna evidencia.
+# Se busca un indicador de via seguido de numero ("kr 5", "cl 20", "mz 3"), ya
+# sobre el texto normalizado, donde carrera->kr, calle->cl y avenida->av.
+STREET_LEVEL_PATTERN = re.compile(
+    r"\b(?:cl|kr|av|transversal|tv|diagonal|dg|manzana|mz|lote|lt|torre|piso|apto|apartamento)\b\s*\d"
+)
+
+
+def is_street_level_address(normalized_address):
+    """Si la direccion normalizada aporta ubicacion de calle y no solo el barrio."""
+    return bool(normalized_address) and bool(STREET_LEVEL_PATTERN.search(normalized_address))
 
 
 def haversine_meters(lat1, lon1, lat2, lon2):
@@ -75,11 +104,27 @@ def relative_close(first, second, tolerance=0.10):
     return abs(first - second) / max(abs(first), abs(second)) <= tolerance
 
 
+def price_gap(first, second):
+    """Diferencia relativa entre dos precios, o None si no se pueden comparar."""
+    if first in (None, 0) or second in (None, 0):
+        return None
+    first, second = abs(float(first)), abs(float(second))
+    if not first or not second:
+        return None
+    return abs(first - second) / max(first, second)
+
+
 def text_similarity(first, second):
     first = normalize_text(first)
     second = normalize_text(second)
     if not first or not second:
         return 0.0
+    # SequenceMatcher.ratio() NO es simetrico: cambia segun cual cadena va
+    # segunda. El detector puntua cada par dos veces (una por publicacion) y
+    # guarda el ultimo resultado, asi que un mismo par podia quedar con 70 o con
+    # 74 segun el orden de procesamiento. Ordenar las cadenas lo vuelve estable.
+    if first > second:
+        first, second = second, first
     return SequenceMatcher(None, first, second).ratio()
 
 
@@ -148,10 +193,20 @@ def score_publications(publication, candidate, image_match=None):
     matches = int(image_match.get("count", 0))
     minimum_hash_distance = image_match.get("minimum_distance")
 
-    if matches:
-        image_points = min(50, 40 + (matches - 1) * 5)
+    near_matches = int(image_match.get("near_count", 0))
+    total_images = matches + near_matches
+    if total_images:
+        if matches:
+            # Archivo identico byte a byte: la evidencia mas fuerte que hay.
+            image_points = min(50, 40 + (total_images - 1) * 5)
+            signal = "identical_images"
+        else:
+            # Misma foto pero reSubida y recomprimida por el portal, asi que el
+            # SHA-256 difiere. Vale un poco menos que la identidad exacta.
+            image_points = min(45, 35 + (total_images - 1) * 5)
+            signal = "same_images_recompressed"
         score += image_points
-        add_reason(reasons, "identical_images", image_points, count=matches,
+        add_reason(reasons, signal, image_points, count=matches, near_count=near_matches,
                    minimum_hash_distance=minimum_hash_distance)
 
     distance = haversine_meters(
@@ -168,10 +223,17 @@ def score_publications(publication, candidate, image_match=None):
 
     address = normalize_text(publication.get("direccion"))
     candidate_address = normalize_text(candidate.get("direccion"))
+    street_level = is_street_level_address(address) and is_street_level_address(candidate_address)
     if address and candidate_address and address == candidate_address:
-        score += 20
-        add_reason(reasons, "same_address", 20)
-    elif address and candidate_address:
+        if street_level:
+            score += 20
+            add_reason(reasons, "same_address", 20)
+        else:
+            # Misma cadena pero solo a nivel barrio/ciudad: no aporta nada que no
+            # cubran ya same_neighborhood y same_city. Queda anotada en 0 para que
+            # la auditoria muestre que se evaluo y por que no sumo.
+            add_reason(reasons, "same_area_not_address", 0, address=address)
+    elif address and candidate_address and street_level:
         similarity = text_similarity(address, candidate_address)
         if similarity >= 0.82:
             score += 12
@@ -228,13 +290,23 @@ def score_publications(publication, candidate, image_match=None):
         score += points
         add_reason(reasons, same_signal if first == second else different_signal, points)
 
-    for field, signal, tolerance, points in (
-        ("precio", "similar_price", 0.15, 3),
-        ("administracion", "similar_administration", 0.15, 2),
-    ):
-        if relative_close(publication.get(field), candidate.get(field), tolerance):
-            score += points
-            add_reason(reasons, signal, points)
+    # El precio es, junto con las imagenes, la senal principal para asociar dos
+    # avisos del mismo inmueble: reSubido conserva el precio o lo mueve poco.
+    # Antes solo sumaba 3 puntos al 15% y nunca restaba, asi que dos inmuebles
+    # con precios muy distintos quedaban emparejados si compartian fotos.
+    price_difference = price_gap(publication.get("precio"), candidate.get("precio"))
+    if price_difference is not None:
+        if price_difference == 0:
+            score += add_reason(reasons, "same_price", 12)
+        elif price_difference <= 0.05:
+            score += add_reason(reasons, "very_similar_price", 8, difference=round(price_difference, 3))
+        elif price_difference <= 0.15:
+            score += add_reason(reasons, "similar_price", 3, difference=round(price_difference, 3))
+        elif price_difference >= PRICE_MAX_DIFFERENCE:
+            score += add_reason(reasons, "different_price", -25, difference=round(price_difference, 3))
+
+    if relative_close(publication.get("administracion"), candidate.get("administracion"), 0.15):
+        score += add_reason(reasons, "similar_administration", 2)
 
     description_similarity = text_similarity(publication.get("descripcion"), candidate.get("descripcion"))
     if description_similarity >= 0.88:
@@ -393,37 +465,58 @@ class DuplicateDetector:
                FROM imagenes_hashes WHERE publicacion_id IN (%s, %s)""",
             (first_id, second_id),
         )
-        grouped = {first_id: [], second_id: []}
-        perceptual = {first_id: [], second_id: []}
+        # Una sola lista por publicacion, con los dos hashes de cada imagen: asi
+        # los indices sirven para las dos comparaciones. Con listas separadas, una
+        # imagen que tuviera un hash y no el otro las desalineaba y el emparejado
+        # perceptual terminaba descartando indices que no correspondian.
+        imagenes = {first_id: [], second_id: []}
         for publication_id, content_hash, perceptual_hash in cursor.fetchall():
-            if content_hash:
-                grouped[publication_id].append(content_hash)
-            if perceptual_hash:
-                perceptual[publication_id].append(perceptual_hash)
+            if publication_id in imagenes:
+                imagenes[publication_id].append((content_hash, perceptual_hash))
         cursor.close()
-        pairs = [
-            (first_index, second_index)
-            for first_index, first_hash in enumerate(grouped[first_id])
-            for second_index, second_hash in enumerate(grouped[second_id])
-            if first_hash == second_hash
-        ]
+
         used_first = set()
         used_second = set()
-        exact = []
-        for first_index, second_index in pairs:
-            if first_index in used_first or second_index in used_second:
+        exact = 0
+        for first_index, (first_content, _) in enumerate(imagenes[first_id]):
+            if not first_content or first_index in used_first:
                 continue
-            used_first.add(first_index)
-            used_second.add(second_index)
-            exact.append((first_index, second_index))
-        perceptual_distances = [
-            hash_distance(first_hash, second_hash)
-            for first_hash in perceptual[first_id]
-            for second_hash in perceptual[second_id]
-        ]
+            for second_index, (second_content, _) in enumerate(imagenes[second_id]):
+                if second_index in used_second or not second_content:
+                    continue
+                if first_content == second_content:
+                    used_first.add(first_index)
+                    used_second.add(second_index)
+                    exact += 1
+                    break
+
+        distancias = sorted(
+            (hash_distance(first_perceptual, second_perceptual), first_index, second_index)
+            for first_index, (_, first_perceptual) in enumerate(imagenes[first_id])
+            if first_perceptual
+            for second_index, (_, second_perceptual) in enumerate(imagenes[second_id])
+            if second_perceptual
+        )
+
+        # Emparejado perceptual uno a uno, del par mas parecido al menos parecido,
+        # saltando las imagenes ya usadas por una coincidencia exacta para no
+        # contar dos veces la misma foto. Recupera la foto reSubida, que el
+        # SHA-256 no ve porque el portal la recomprime.
+        near_first, near_second = set(used_first), set(used_second)
+        near_count = 0
+        for distance, first_index, second_index in distancias:
+            if distance > PERCEPTUAL_MAX_DISTANCE:
+                break
+            if first_index in near_first or second_index in near_second:
+                continue
+            near_first.add(first_index)
+            near_second.add(second_index)
+            near_count += 1
+
         return {
-            "count": len(exact),
-            "minimum_distance": min(perceptual_distances) if perceptual_distances else None,
+            "count": exact,
+            "near_count": near_count,
+            "minimum_distance": distancias[0][0] if distancias else None,
         }
 
     def _save_match(self, first_id, second_id, score, state, distance, image_match, reasons):
@@ -435,7 +528,10 @@ class DuplicateDetector:
                 imagenes_coincidentes, distancia_hash_minima, razones)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE puntaje = VALUES(puntaje),
-                 estado = IF(estado = 'descartada', estado, VALUES(estado)),
+                 -- Lo revisado a mano manda sobre el recalculo: sin esto, volver
+                 -- a correr el detector devolvia una coincidencia confirmada al
+                 -- estado automatico y habia que confirmarla otra vez.
+                 estado = IF(estado IN ('descartada', 'confirmada'), estado, VALUES(estado)),
                  distancia_metros = VALUES(distancia_metros),
                  imagenes_coincidentes = VALUES(imagenes_coincidentes),
                  distancia_hash_minima = VALUES(distancia_hash_minima), razones = VALUES(razones)""",
