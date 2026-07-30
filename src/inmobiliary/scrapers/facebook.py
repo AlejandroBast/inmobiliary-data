@@ -30,7 +30,13 @@ except ImportError:
 
 from inmobiliary.detectors.duplicates import detect_duplicates_safely
 import inmobiliary.common as common
-from inmobiliary.detectors.location import location_diagnostic, resolve_pasto_location
+from inmobiliary.detectors.location import (
+    detect_outside_municipality,
+    load_catalog,
+    location_diagnostic,
+    resolve_pasto_location,
+)
+from inmobiliary.detectors.location import normalize_text as normalize_catalog_text
 from inmobiliary.detectors.ph import detect_ph
 from inmobiliary.net import with_retry
 from inmobiliary.common import (
@@ -51,13 +57,29 @@ SOURCE_NAME = "Facebook Marketplace"
 # Facebook corre contra una instancia MySQL en 3301 salvo que se indique otra.
 DB_DEFAULT_PORT = "3301"
 
+# ID de la pagina de ubicacion de Pasto en Marketplace. Es el mismo que Facebook
+# devuelve en reverse_geocode.city_page.id al geocodificar un aviso de Pasto, asi
+# que se puede verificar contra cualquier evidencia guardada.
+PASTO_LOCATION_ID = "108037152563666"
+
+# Listado de inmuebles de Pasto, copiado de la barra de direcciones con los
+# filtros ya aplicados desde la UI de Marketplace. category_id es la categoria
+# Inmuebles y exact=false deja que Facebook amplie la coincidencia del texto.
+# daysSinceListed NO va aca: lo inyecta build_search_urls segun el modo (30 dias
+# la primera corrida, 7 las siguientes).
 DEFAULT_MARKETPLACE_URLS = [
     (
-        "https://www.facebook.com/marketplace/108037152563666/search/"
-        "?category_id=1270772586445798&query=Viviendas%20en%20venta"
+        f"https://www.facebook.com/marketplace/{PASTO_LOCATION_ID}/search"
+        "?query=Inmuebles&category_id=1270772586445798&exact=false"
         "&referral_ui_component=category_menu_item"
     ),
 ]
+
+# Radio en km alrededor de Pasto. Marketplace no respeta el limite municipal, asi
+# que un radio chico es la primera defensa contra avisos de otras ciudades. La URL
+# copiada del navegador no lo trae porque Facebook lo recuerda por sesion;
+# mandarlo explicito evita depender de esa preferencia guardada.
+DEFAULT_SEARCH_RADIUS_KM = "20"
 
 DEFAULT_PRICE_BUCKETS = [
     (None, 80_000_000),
@@ -87,7 +109,15 @@ HEADLESS = os.getenv("FACEBOOK_HEADLESS", "false").lower() in ("1", "true", "yes
 DRY_RUN = os.getenv("FACEBOOK_DRY_RUN", "false").lower() in ("1", "true", "yes", "y")
 SEARCH_CITY = os.getenv("FACEBOOK_SEARCH_CITY", "pasto")
 SEARCH_CATEGORY = os.getenv("FACEBOOK_SEARCH_CATEGORY", "homesales")
-SEARCH_RADIUS = os.getenv("FACEBOOK_SEARCH_RADIUS")
+SEARCH_RADIUS = os.getenv("FACEBOOK_SEARCH_RADIUS", DEFAULT_SEARCH_RADIUS_KM)
+# Ventana de antiguedad del listado (filtro "Fecha de publicacion" de Marketplace).
+# La primera corrida mira 30 dias y las siguientes solo 7: intentar traer todo el
+# historico de una sola vez es lo que dispara la restriccion temporal de la cuenta
+# (aparecia alrededor de las 300 publicaciones recolectadas).
+FIRST_RUN_DATE_LISTED_DAYS_RAW = os.getenv("FACEBOOK_FIRST_RUN_DAYS", "30")
+INCREMENTAL_DATE_LISTED_DAYS_RAW = os.getenv("FACEBOOK_INCREMENTAL_DAYS", "7")
+# Override manual: gana en los dos modos. En 0 se recolecta sin filtro de fecha
+# (el comportamiento viejo), util para una corrida de recuperacion puntual.
 DATE_LISTED_DAYS = os.getenv("FACEBOOK_DATE_LISTED_DAYS")
 MIN_PRICE_FILTER = os.getenv("FACEBOOK_MIN_PRICE")
 MAX_PRICE_FILTER = os.getenv("FACEBOOK_MAX_PRICE")
@@ -102,6 +132,22 @@ FULL_SWEEP = os.getenv("FACEBOOK_FULL_SWEEP", "false").lower() in ("1", "true", 
 # Las URLs van ordenadas por creation_time_descend: al llegar a lo ya conocido,
 # lo que sigue es mas viejo todavia.
 CONSECUTIVE_EXISTING_LIMIT = int(os.getenv("FACEBOOK_CONSECUTIVE_EXISTING_LIMIT", "5"))
+# Ordenar por mas reciente parece cambiar el modo de resultados de Marketplace:
+# deja de mostrar la seccion "Resultados relacionados fuera de tu busqueda" y
+# sigue sirviendo avisos cada vez mas lejanos sin corte, con lo que el scroll se
+# va a miles. La URL de la UI (la que da 59 resultados con el encabezado visible)
+# no lleva sortBy, asi que el defecto es no mandarlo.
+SORT_BY_NEWEST = os.getenv("FACEBOOK_SORT_BY_NEWEST", "false").lower() in ("1", "true", "yes", "y")
+# Descarta desde el listado los avisos cuya tarjeta declara otra ciudad, sin
+# abrirlos. En false se vuelve al comportamiento viejo: se visita todo y el
+# municipio se filtra recien en la pagina de detalle.
+SKIP_NON_PASTO_CARDS = os.getenv("FACEBOOK_SKIP_NON_PASTO_CARDS", "true").lower() in ("1", "true", "yes", "y")
+# Tarjetas de otra ciudad seguidas que dan por agotado el inventario local.
+# Marketplace no corta el scroll infinito cuando se terminan los avisos de la
+# ciudad pedida: sigue rellenando con resultados cada vez mas lejanos (aparecen
+# hasta de Bogota, a 700 km). Seguir scrolleando ahi solo suma requests y basura,
+# que es lo que termina restringiendo la cuenta. En 0 se desactiva el corte.
+CONSECUTIVE_OUTSIDE_LIMIT = int(os.getenv("FACEBOOK_CONSECUTIVE_OUTSIDE_LIMIT", "25"))
 STALL_SCROLLS = int(os.getenv("FACEBOOK_STALL_SCROLLS", "4"))
 MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "0"))
 MAX_DETAILS = int(os.getenv("FACEBOOK_MAX_DETAILS", "0"))
@@ -324,7 +370,52 @@ def get_search_phrases():
     return split_env_list(os.getenv("FACEBOOK_SEARCH_PHRASES"))
 
 
+# Marketplace solo ofrece 1, 7 y 30 dias en su filtro de fecha de publicacion.
+# Con cualquier otro valor de daysSinceListed devuelve el listado sin filtrar, que
+# es justo lo que se quiere evitar, asi que se avisa en vez de fallar en silencio.
+ALLOWED_DATE_LISTED_DAYS = (1, 7, 30)
+
+
+def parse_date_listed_days(raw, default, var_name):
+    """Ventana de antiguedad en dias. Devuelve None si no hay que filtrar."""
+    if raw is None or not str(raw).strip():
+        return default
+
+    try:
+        days = int(str(raw).strip())
+    except ValueError:
+        print(f"[WARN] {var_name}={raw} no es un numero entero; se usa {default}.")
+        return default
+
+    if days <= 0:
+        print(f"[WARN] {var_name}={days}: se recolecta sin filtro de antiguedad.")
+        return None
+
+    if days not in ALLOWED_DATE_LISTED_DAYS:
+        print(
+            f"[WARN] {var_name}={days}: Marketplace solo respeta "
+            f"{ALLOWED_DATE_LISTED_DAYS} en daysSinceListed y puede ignorar el filtro."
+        )
+    return days
+
+
+def resolve_date_listed_days(incremental):
+    """Dias de antiguedad maxima segun el modo: 30 la primera corrida, 7 las demas."""
+    if incremental:
+        default = parse_date_listed_days(
+            INCREMENTAL_DATE_LISTED_DAYS_RAW, 7, "FACEBOOK_INCREMENTAL_DAYS"
+        )
+    else:
+        default = parse_date_listed_days(
+            FIRST_RUN_DATE_LISTED_DAYS_RAW, 30, "FACEBOOK_FIRST_RUN_DAYS"
+        )
+    # El override queda encima del defecto del modo; si no esta definido,
+    # parse_date_listed_days devuelve ese mismo defecto.
+    return parse_date_listed_days(DATE_LISTED_DAYS, default, "FACEBOOK_DATE_LISTED_DAYS")
+
+
 def build_search_urls(incremental=False):
+    date_listed_days = resolve_date_listed_days(incremental)
     configured_urls = split_env_list(os.getenv("FACEBOOK_MARKETPLACE_URLS"))
     if configured_urls:
         base_urls = configured_urls
@@ -339,37 +430,35 @@ def build_search_urls(incremental=False):
                 params = {"query": phrase}
                 if SEARCH_CATEGORY:
                     params["category"] = SEARCH_CATEGORY
-                if SEARCH_RADIUS:
-                    params["radius"] = SEARCH_RADIUS
-                if DATE_LISTED_DAYS:
-                    params["daysSinceListed"] = DATE_LISTED_DAYS
                 if MIN_PRICE_FILTER:
                     params["minPrice"] = MIN_PRICE_FILTER
                 if MAX_PRICE_FILTER:
                     params["maxPrice"] = MAX_PRICE_FILTER
-                params["sortBy"] = "creation_time_descend"
                 urls.append(f"{BASE_URL}/marketplace/{quote_plus(SEARCH_CITY)}/search/?{urlencode(params)}")
             base_urls = urls
 
-    # En modo incremental alcanza con el listado sin filtro de precio, pero el
-    # orden por mas reciente es obligatorio: el corte por links ya existentes
-    # solo es correcto si lo que sigue es mas viejo. DEFAULT_MARKETPLACE_URLS y
-    # las URLs de FACEBOOK_MARKETPLACE_URLS no lo traen, asi que se fuerza aca.
-    if incremental:
-        return dedupe_urls([
-            set_url_params(base_url, {"sortBy": "creation_time_descend"})
-            for base_url in base_urls
-        ])
+    # Estos filtros van en TODOS los listados de TODOS los modos, no solo en el
+    # modo por frases como antes:
+    # - daysSinceListed: mantiene corta la corrida y a la cuenta sin restringir.
+    # - radius: Marketplace no respeta el limite municipal por si solo.
+    # - sortBy: solo si se pide (ver SORT_BY_NEWEST); pisa el corte por encabezado.
+    # En None, set_url_params borra el parametro en vez de escribirlo.
+    ventana = {
+        "daysSinceListed": date_listed_days,
+        "radius": SEARCH_RADIUS or None,
+        "sortBy": "creation_time_descend" if SORT_BY_NEWEST else None,
+    }
 
-    if not SPLIT_PRICE_BUCKETS:
-        return dedupe_urls(base_urls)
+    # En modo incremental alcanza con un solo listado sin filtro de precio.
+    if incremental or not SPLIT_PRICE_BUCKETS:
+        return dedupe_urls([set_url_params(base_url, ventana) for base_url in base_urls])
 
     urls = []
     for base_url in base_urls:
         if INCLUDE_UNFILTERED_LISTING:
-            urls.append(base_url)
+            urls.append(set_url_params(base_url, ventana))
         for min_price, max_price in parse_price_buckets(os.getenv("FACEBOOK_PRICE_BUCKETS")):
-            updates = {"sortBy": "creation_time_descend"}
+            updates = dict(ventana)
             updates["minPrice"] = min_price
             updates["maxPrice"] = max_price
             urls.append(set_url_params(base_url, updates))
@@ -455,24 +544,188 @@ def wait_for_manual_login_if_needed(page):
     page.wait_for_timeout(LOGIN_WAIT_SECONDS * 1000)
 
 
-def extract_links_from_page(page):
+# Departamentos de Colombia, para reconocer la linea de ubicacion de una tarjeta
+# ("Pasto, Narino", "Fusagasuga, Cundinamarca"). Sirve de ancla: si el segundo
+# segmento no es un departamento, la linea no es una ubicacion y no se decide
+# nada con ella.
+COLOMBIA_DEPARTMENTS = {
+    "AMAZONAS", "ANTIOQUIA", "ARAUCA", "ATLANTICO", "BOLIVAR", "BOYACA",
+    "CALDAS", "CAQUETA", "CASANARE", "CAUCA", "CESAR", "CHOCO", "CORDOBA",
+    "CUNDINAMARCA", "GUAINIA", "GUAVIARE", "HUILA", "LA GUAJIRA", "MAGDALENA",
+    "META", "NARINO", "NORTE DE SANTANDER", "PUTUMAYO", "QUINDIO", "RISARALDA",
+    "SAN ANDRES Y PROVIDENCIA", "SANTANDER", "SUCRE", "TOLIMA",
+    "VALLE DEL CAUCA", "VAUPES", "VICHADA",
+    # Bogota se reporta como "Bogota, D.C."
+    "D.C.", "DC", "D. C.",
+}
+
+CARD_LOCATION_PATTERN = re.compile(r"^\s*([^,]{2,60}?)\s*,\s*([^,]{2,40}?)\s*$")
+
+
+def card_city_is_outside_pasto(card_text):
+    """Si la tarjeta del listado declara una ciudad que no es Pasto.
+
+    Deliberadamente conservador: solo decide cuando la linea tiene forma
+    "<ciudad>, <departamento>" con un departamento real. Si no puede decidir
+    devuelve False y la publicacion se abre igual, donde el filtro de detalle
+    tiene el texto completo. Asi un cambio de maquetado de Facebook nunca hace
+    perder anuncios validos: en el peor caso se vuelve al comportamiento viejo.
+    """
+    for line in reversed(get_lines(card_text)):
+        match = CARD_LOCATION_PATTERN.match(line)
+        if not match:
+            continue
+
+        department = normalize_text(match.group(2))
+        if department not in COLOMBIA_DEPARTMENTS:
+            continue
+
+        # Pasto esta en Narino: cualquier otro departamento queda afuera sin
+        # necesidad de mirar la ciudad.
+        if department != "NARINO":
+            return True
+        return not is_pasto_declared_city(extract_declared_city(match.group(1)))
+
+    return False
+
+
+# Facebook separa los resultados reales del relleno con un encabezado explicito
+# ("Resultados relacionados fuera de tu busqueda"). Todo lo que aparece DEBAJO es
+# de otras ciudades: ahi se termino el inventario de la busqueda y seguir
+# scrolleando solo suma requests y basura.
+OUT_OF_SCOPE_HEADINGS = [
+    "RESULTADOS RELACIONADOS FUERA DE TU BUSQUEDA",
+    "RESULTADOS FUERA DE TU BUSQUEDA",
+    "RESULTADOS DE FUERA DEL AREA DE BUSQUEDA",
+    "RESULTADOS RELACIONADOS",
+    "MAS RESULTADOS FUERA DE TU BUSQUEDA",
+    "RELATED RESULTS OUTSIDE YOUR SEARCH",
+    "RESULTS FROM OUTSIDE YOUR SEARCH",
+]
+
+# Un encabezado es corto. El tope evita agarrar un contenedor que envuelva media
+# pagina: su textContent tambien "contiene" el encabezado, y tomarlo por
+# separador dejaria a los resultados buenos del lado equivocado.
+MAX_HEADING_LENGTH = 120
+
+
+def is_out_of_scope_heading(text):
+    """Si un texto es el encabezado con el que Facebook separa el relleno.
+    La misma comparacion corre dentro de la pagina en extract_link_cards; se
+    mantiene aca en Python para poder fijarla con pruebas."""
+    normalized = re.sub(r"\s+", " ", normalize_text(text) or "").strip()
+    if not normalized or len(normalized) > MAX_HEADING_LENGTH:
+        return False
+    return any(heading in normalized for heading in OUT_OF_SCOPE_HEADINGS)
+
+
+# Replica en JS de is_out_of_scope_heading + posicion en el documento. Tiene que
+# correr dentro de la pagina: hace falta el orden real del DOM para saber que
+# tarjetas quedaron debajo del encabezado.
+_COLLECT_CARDS_JS = """
+(config) => {
+  const norm = (value) => (value || "")
+      .normalize("NFD").replace(/[\\u0300-\\u036f]/g, "")
+      .toUpperCase().replace(/\\s+/g, " ").trim();
+
+  const matches = (element) => {
+    const text = norm(element.textContent);
+    if (!text || text.length > config.maxHeadingLength) return false;
+    return config.headings.some((heading) => text.includes(heading));
+  };
+
+  // Los encabezados reales primero; los div/span son el plan B por si Facebook
+  // deja de usar una etiqueta de encabezado.
+  let separator = null;
+  for (const selector of ["h1,h2,h3,h4,h5", "span,div"]) {
+    for (const element of document.querySelectorAll(selector)) {
+      if (matches(element)) { separator = element; break; }
+    }
+    if (separator) break;
+  }
+
+  const anchors = document.querySelectorAll('a[href*="/marketplace/item/"]');
+  const cards = [];
+  for (const anchor of anchors) {
+    let afterSeparator = false;
+    if (separator) {
+      const relation = separator.compareDocumentPosition(anchor);
+      afterSeparator = Boolean(relation & Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+    cards.push({
+      href: anchor.href || anchor.getAttribute("href"),
+      text: anchor.innerText || "",
+      afterSeparator: afterSeparator,
+    });
+  }
+
+  // Diagnostico: que encabezados hay de verdad en la pagina. Sirve para saber si
+  // el separador no aparecio porque Facebook cambio el texto o porque no muestra
+  // la seccion. Solo se junta cuando se pide, es un recorrido completo del DOM.
+  const headingsSeen = [];
+  if (config.collectHeadings) {
+    const push = (value) => {
+      const text = norm(value);
+      if (text && text.length <= config.maxHeadingLength && !headingsSeen.includes(text)) {
+        headingsSeen.push(text);
+      }
+    };
+    for (const element of document.querySelectorAll("h1,h2,h3,h4,h5")) push(element.textContent);
+    for (const element of document.querySelectorAll("span,div")) {
+      const text = norm(element.textContent);
+      if (text.length <= config.maxHeadingLength && /RESULTADO|RESULTS|BUSQUEDA|SEARCH/.test(text)) {
+        push(element.textContent);
+      }
+    }
+  }
+
+  return {
+    separatorFound: Boolean(separator),
+    cards: cards,
+    headingsSeen: headingsSeen.slice(0, 25),
+  };
+}
+"""
+
+
+def extract_link_cards(page, collect_headings=False):
+    """(link, texto, esta_debajo_del_separador) de cada anuncio del listado, mas
+    si aparecio el encabezado de resultados fuera de la busqueda.
+
+    Se lee el texto de la tarjeta, no solo el href: ya trae la ciudad, asi que
+    permite descartar lo que no es de Pasto SIN abrir la publicacion. Antes el
+    municipio recien se descubria en la pagina de detalle, o sea despues de haber
+    gastado la visita, y es ese volumen el que restringe la cuenta.
+    """
     try:
-        hrefs = page.eval_on_selector_all(
-            'a[href*="/marketplace/item/"]',
-            "(elements) => elements.map((element) => element.href || element.getAttribute('href'))",
+        payload = page.evaluate(
+            _COLLECT_CARDS_JS,
+            {
+                "headings": OUT_OF_SCOPE_HEADINGS,
+                "maxHeadingLength": MAX_HEADING_LENGTH,
+                "collectHeadings": bool(collect_headings),
+            },
         )
     except Exception:
-        hrefs = []
+        payload = None
 
-    links = []
+    payload = payload or {}
+    results = []
     seen = set()
-    for href in hrefs:
-        link = normalize_marketplace_link(href)
+    for card in payload.get("cards") or []:
+        link = normalize_marketplace_link((card or {}).get("href"))
         if not link or link in seen:
             continue
         seen.add(link)
-        links.append(link)
-    return links
+        # Ojo: el texto NO pasa por clean_text, que colapsa los saltos de linea.
+        # La ubicacion se reconoce por estar en su propia linea de la tarjeta.
+        results.append((link, (card or {}).get("text") or "", bool((card or {}).get("afterSeparator"))))
+    return results, bool(payload.get("separatorFound")), payload.get("headingsSeen") or []
+
+
+def extract_links_from_page(page):
+    cards, _separator_found, _headings = extract_link_cards(page)
+    return [link for link, _text, after_separator in cards if not after_separator]
 
 
 def export_session_cookies(context):
@@ -507,10 +760,22 @@ def collect_publication_links(context, connection=None, fuente_id=None, incremen
         limit_reason=None,
     )
 
+    # Queda en la auditoria porque explica la mayor parte de los anuncios "que
+    # faltan": no es un scroll que se corto, es la ventana de fecha pedida.
+    date_listed_days = resolve_date_listed_days(incremental)
+    if date_listed_days:
+        audit.add_note(
+            f"Filtro de antiguedad: solo publicaciones de los ultimos "
+            f"{date_listed_days} dias (daysSinceListed={date_listed_days})."
+        )
+    else:
+        audit.add_note("Sin filtro de antiguedad: se recorre todo el historico del listado.")
+
     page = context.new_page()
     all_links = []
     seen = set()
     limit_reason = None
+    total_fuera_de_pasto = 0
 
     for query_index, search_url in enumerate(search_urls, start=1):
         print(f"\n[INFO] Listado Facebook {query_index}/{len(search_urls)}")
@@ -538,30 +803,74 @@ def collect_publication_links(context, connection=None, fuente_id=None, incremen
 
         stall_count = 0
         consecutive_existing = 0
+        consecutive_outside = 0
         listing_ya_guardados = 0
+        listing_fuera_de_pasto = 0
         alcanzo_lo_ya_guardado = False
+        agoto_inventario_local = False
 
         for scroll_number in range(1, MAX_SCROLLS + 1):
             page.wait_for_timeout(int(SCROLL_PAUSE_SECONDS * 1000))
-            page_links = extract_links_from_page(page)
+            page_cards, separador_visible, encabezados = extract_link_cards(
+                page, collect_headings=scroll_number == 1
+            )
+            if scroll_number == 1 and not separador_visible:
+                # Sin este dato no hay forma de saber si el corte no disparo
+                # porque Facebook cambio el texto del encabezado o porque no
+                # muestra la seccion en este listado.
+                muestra = " | ".join(encabezados[:12]) or "(ninguno)"
+                print(f"[INFO] Encabezados vistos en la pagina: {muestra}")
             new_links = 0
             duplicate_links = 0
+            descartados_por_ciudad = 0
+            descartados_por_separador = 0
 
-            for link in page_links:
+            for link, card_text, debajo_del_separador in page_cards:
+                # Debajo del encabezado "Resultados relacionados fuera de tu
+                # busqueda" ya no hay nada de la ciudad pedida. Es un descarte
+                # exacto, dicho por Facebook, no una heuristica.
+                if debajo_del_separador:
+                    descartados_por_separador += 1
+                    continue
+
                 item_id = extract_marketplace_id(link) or link
                 if item_id in seen:
                     duplicate_links += 1
                     continue
                 seen.add(item_id)
 
+                # Descartar por la ciudad de la tarjeta ahorra abrir la
+                # publicacion. Es la unica forma de bajar el volumen de visitas:
+                # el filtro de detalle rechaza igual, pero recien despues de
+                # haber cargado la pagina.
+                if SKIP_NON_PASTO_CARDS and card_city_is_outside_pasto(card_text):
+                    descartados_por_ciudad += 1
+                    listing_fuera_de_pasto += 1
+                    consecutive_outside += 1
+
+                    if 0 < CONSECUTIVE_OUTSIDE_LIMIT <= consecutive_outside:
+                        agoto_inventario_local = True
+                        break
+
+                    continue
+
+                consecutive_outside = 0
+
                 if incremental and ya_esta_en_bd(connection, link, fuente_id):
                     listing_ya_guardados += 1
                     consecutive_existing += 1
 
-                    if consecutive_existing >= CONSECUTIVE_EXISTING_LIMIT:
+                    # Este corte solo es correcto con el listado ordenado por mas
+                    # reciente: sin eso, unos links ya guardados no significan que
+                    # lo que sigue sea mas viejo, y cortar ahi pierde avisos. Ya
+                    # no hace falta para acotar la corrida: de eso se encargan la
+                    # ventana de fecha y el corte por encabezado.
+                    if SORT_BY_NEWEST and consecutive_existing >= CONSECUTIVE_EXISTING_LIMIT:
                         alcanzo_lo_ya_guardado = True
                         break
 
+                    # Saltear el link ya guardado siempre conviene: evita volver a
+                    # abrir su pagina de detalle.
                     continue
 
                 consecutive_existing = 0
@@ -584,22 +893,51 @@ def collect_publication_links(context, connection=None, fuente_id=None, incremen
                 audit.add_note(nota)
                 break
 
+            if agoto_inventario_local:
+                nota = (
+                    f"Listado {query_index} detenido: {CONSECUTIVE_OUTSIDE_LIMIT} tarjetas seguidas "
+                    f"de otra ciudad. Se agotaron los avisos de Pasto y Marketplace esta "
+                    f"rellenando con resultados lejanos."
+                )
+                print(f"[INFO] {nota}")
+                audit.add_note(nota)
+                break
+
             audit.record_page(
                 f"q{query_index}_scroll_{scroll_number}",
                 url=search_url,
-                links_count=len(page_links),
+                links_count=len(page_cards),
                 new_links_count=new_links,
                 duplicate_links_count=duplicate_links,
             )
             print(
                 f"[INFO] Scroll {scroll_number}/{MAX_SCROLLS}: "
-                f"{len(page_links)} links visibles, {new_links} nuevos, {duplicate_links} repetidos"
+                f"{len(page_cards)} links visibles, {new_links} nuevos, "
+                f"{duplicate_links} repetidos, {descartados_por_ciudad} fuera de Pasto"
+                + (f", {descartados_por_separador} bajo el separador" if descartados_por_separador else "")
             )
 
             if limit_reason:
                 break
 
-            if new_links == 0:
+            # Facebook ya dijo donde termina la busqueda. Se corta despues de
+            # haber procesado las tarjetas de arriba del encabezado, que en este
+            # mismo scroll pueden ser nuevas.
+            if separador_visible:
+                nota = (
+                    f"Listado {query_index} detenido en el scroll {scroll_number}: apareció "
+                    f"\"Resultados relacionados fuera de tu búsqueda\". "
+                    f"Ahi se agotaron los avisos de Pasto."
+                )
+                print(f"[INFO] {nota}")
+                audit.add_note(nota)
+                break
+
+            # Una tarjeta descartada por ciudad tambien es avance: si no contara,
+            # un tramo del listado lleno de avisos de otros departamentos
+            # disparararia el corte por estancamiento y se perderia lo de Pasto
+            # que viene mas abajo.
+            if new_links == 0 and descartados_por_ciudad == 0:
                 stall_count += 1
             else:
                 stall_count = 0
@@ -619,13 +957,30 @@ def collect_publication_links(context, connection=None, fuente_id=None, incremen
         if limit_reason:
             break
 
+        if not separador_visible and listing_new_links > 0:
+            nota = (
+                f"Listado {query_index}: nunca aparecio el encabezado de resultados fuera "
+                f"de la busqueda, asi que el scroll corrio hasta sus otros limites."
+            )
+            print(f"[WARN] {nota}")
+            audit.add_note(nota)
+
+        total_fuera_de_pasto += listing_fuera_de_pasto
         print(
             f"[INFO] Listado {query_index} terminado: "
             f"{listing_new_links} nuevos, {listing_duplicate_links} repetidos, "
-            f"{listing_ya_guardados} ya en base, {len(all_links)} acumulados"
+            f"{listing_ya_guardados} ya en base, {listing_fuera_de_pasto} fuera de Pasto, "
+            f"{len(all_links)} acumulados"
         )
 
     page.close()
+    if total_fuera_de_pasto:
+        nota = (
+            f"{total_fuera_de_pasto} avisos descartados desde el listado por declarar "
+            f"otra ciudad: no se abrio su pagina de detalle."
+        )
+        print(f"[INFO] {nota}")
+        audit.add_note(nota)
     if limit_reason:
         audit.limit_reason = limit_reason
     if not all_links:
@@ -740,6 +1095,25 @@ def extract_first_json_string(html, patterns):
     return None
 
 
+# Bloque "location" del JSON embebido de Marketplace:
+#   "location":{"latitude":1.21,"longitude":-77.28,
+#               "reverse_geocode_detailed":{"city":"Pasto","state":"","postal_code":"520002"},
+#               "reverse_geocode":{"city":"Pasto","city_page":{"display_name":"Pasto",...}}}
+# Se prueban las tres variantes porque no todas aparecen en todos los avisos.
+GEOCODE_CITY_PATTERNS = [
+    r'"reverse_geocode_detailed"\s*:\s*\{[^{}]*"city"\s*:\s*"((?:\\.|[^"\\])*)"',
+    r'"reverse_geocode"\s*:\s*\{\s*"city"\s*:\s*"((?:\\.|[^"\\])*)"',
+    r'"city_page"\s*:\s*\{\s*"display_name"\s*:\s*"((?:\\.|[^"\\])*)"',
+]
+
+# El lookahead a "reverse_geocode" ata el par de coordenadas al bloque de
+# ubicacion del aviso: la pagina trae otras latitudes/longitudes sueltas.
+GEOCODE_COORDS_PATTERN = re.compile(
+    r'"latitude"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*,\s*'
+    r'"longitude"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)[^{}]*"reverse_geocode'
+)
+
+
 def extract_embedded_listing_fields(html):
     title = extract_first_json_string(
         html,
@@ -766,6 +1140,19 @@ def extract_embedded_listing_fields(html):
         html,
         [r'"location_text"\s*:\s*\{\s*"text"\s*:\s*"((?:\\.|[^"\\])*)"'],
     )
+    # Ciudad y coordenadas salen de la geocodificacion que Facebook ya hizo del
+    # aviso. Es el dato autoritativo de donde esta el inmueble y no depende del
+    # texto renderizado: "location_text" no aparece en ningun HTML guardado, asi
+    # que sin esto el municipio se decide raspando texto.
+    city = extract_first_json_string(html, GEOCODE_CITY_PATTERNS)
+    latitude = longitude = None
+    match = GEOCODE_COORDS_PATTERN.search(html or "")
+    if match:
+        try:
+            latitude = float(match.group(1))
+            longitude = float(match.group(2))
+        except ValueError:
+            latitude = longitude = None
 
     price_amount = None
     match = re.search(r'"listing_price"\s*:\s*\{[^{}]*"amount"\s*:\s*"(\d+)"', html or "")
@@ -781,6 +1168,9 @@ def extract_embedded_listing_fields(html):
         "price_text": price_text,
         "price_amount": price_amount,
         "location": location,
+        "city": city,
+        "latitude": latitude,
+        "longitude": longitude,
     }
 
 
@@ -1110,6 +1500,16 @@ def extract_barrio(title, description):
     return None
 
 
+# Un nombre de ciudad no ocupa 60 caracteres ni 6 palabras ("San Andres de
+# Tumaco" son 4). Los topes evitan que una frase del anuncio se tome por ciudad
+# declarada: eso rechazaria avisos validos de Pasto, no solo los de afuera.
+MAX_DECLARED_CITY_LENGTH = 60
+MAX_DECLARED_CITY_WORDS = 5
+
+# Como puede venir declarada la ciudad en un aviso que si es de Pasto.
+PASTO_DECLARED_CITY_NAMES = {"PASTO", "SAN JUAN DE PASTO"}
+
+
 def extract_declared_city(location_text):
     """Primer segmento del campo de ubicacion que Facebook reporta para el
     anuncio (ej. 'Popayan, Cauca' -> 'POPAYAN'). Es el dato mas confiable sobre
@@ -1117,26 +1517,67 @@ def extract_declared_city(location_text):
     frecuentemente menciona 'Pasto' solo como referencia de cercania."""
     if not location_text:
         return None
+
     first_segment = location_text.split(",")[0]
-    return normalize_text(first_segment) or None
+    city = normalize_text(first_segment) or None
+    # Si el candidato es larguisimo o trae cifras, no es una ciudad sino texto
+    # del anuncio que se cologo en el campo. Devolver None es lo correcto: deja
+    # que decida el texto libre en vez de inventar un municipio.
+    if not city or len(city) > MAX_DECLARED_CITY_LENGTH or re.search(r"\d", city):
+        return None
+    if len(city.split()) > MAX_DECLARED_CITY_WORDS:
+        return None
+    # "Se vende casa esquinera" es una frase del aviso, no una ciudad. Se reusan
+    # los patrones de operacion del propio modulo para no mantener otra lista.
+    if any(re.search(pattern, city) for pattern in SALE_PATTERNS + NEGATIVE_OPERATION_PATTERNS):
+        return None
+    return city
+
+
+def is_pasto_declared_city(declared_city):
+    """Si la ciudad declarada por Marketplace corresponde al municipio de Pasto.
+    Algunos avisos declaran el corregimiento (Catambuco, Genoy...) en vez de la
+    ciudad, asi que se consulta el catalogo compartido de veredas."""
+    if not declared_city:
+        return False
+    if declared_city in PASTO_DECLARED_CITY_NAMES:
+        return True
+
+    _, rural = load_catalog()
+    return normalize_catalog_text(declared_city) in rural
 
 
 def is_explicitly_out_of_city(title, description, location_text=None):
     declared_city = extract_declared_city(location_text)
     if declared_city:
-        if declared_city == "PASTO":
+        if is_pasto_declared_city(declared_city):
             return False
-        if any(keyword == declared_city or keyword in declared_city for keyword in OUT_OF_CITY_KEYWORDS):
-            return True
+        # Marketplace declaro una ciudad y no es Pasto: se rechaza, sin depender
+        # de una lista negra. Antes solo se rechazaban los 13 municipios de
+        # OUT_OF_CITY_KEYWORDS, asi que cualquier otra ciudad (Cali, Bogota,
+        # Cartagena...) pasaba el filtro y se guardaba como si fuera de Pasto.
+        # El radio de busqueda de Marketplace no respeta el limite municipal, asi
+        # que esto es lo unico que separa Pasto del resto de la region.
+        return True
 
     source = normalize_text(f"{title or ''}\n{description or ''}")
-    return any(re.search(rf"\b{re.escape(keyword)}\b", source) for keyword in OUT_OF_CITY_KEYWORDS)
+    if any(re.search(rf"\b{re.escape(keyword)}\b", source) for keyword in OUT_OF_CITY_KEYWORDS):
+        return True
+
+    # Para el resto de municipios se delega en el detector compartido, que exige
+    # contexto ("municipio de X", "casa en X") en vez de buscar el nombre suelto.
+    # Buscarlo suelto rechazaba casi todo: "Bello" es municipio de Antioquia pero
+    # tambien el adjetivo de "bello apartamento", que aparece en media Colombia.
+    return detect_outside_municipality(None, title, description) is not None
 
 
-def extract_city(title, description):
-    source = normalize_text(f"{title or ''}\n{description or ''}")
-    if "PASTO" in source:
-        return "Pasto"
+def extract_city(title, description, location_text=None):
+    """Ciudad del aviso. Manda la ubicacion declarada por Marketplace sobre el
+    texto libre: antes esta funcion devolvia "Pasto" en las dos ramas del if, o
+    sea siempre, y un aviso de Cali quedaba guardado con ciudad='Pasto'."""
+    declared_city = extract_declared_city(location_text)
+    if declared_city:
+        return declared_city.title()
     return "Pasto"
 
 
@@ -1528,15 +1969,67 @@ def extract_antiguedad(text):
     return clean_text(match.group(1)).title()
 
 
+# Marketplace rotula la ubicacion del aviso con "Ubicacion de la vivienda" y la
+# cierra con "La ubicacion es aproximada". Se ancla en ese rotulo en vez de
+# buscar una linea que diga "Pasto" (ver extract_location).
+LOCATION_ANCHOR_PATTERNS = [
+    re.compile(
+        r"UBICACI[OÓ]N\s+(?:DE|DEL)\s+(?:LA\s+)?(?:VIVIENDA|INMUEBLE|PROPIEDAD)\s*[:\-]?\s+(.+)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"UBICACI[OÓ]N\s*[:\-]\s*(.+)", re.IGNORECASE),
+]
+
+LOCATION_STOP_PATTERN = re.compile(
+    r"\b(?:LA\s+UBICACI[OÓ]N\s+ES\s+APROXIMADA|DESCRIPCI[OÓ]N|PUBLICIDAD|"
+    r"VER\s+M[AÁ]S|VER\s+MENOS|DETALLES|VENDEDOR)\b",
+    re.IGNORECASE,
+)
+
+
+def _plausible_location(value):
+    """Recorta un candidato a ubicacion en el primer rotulo siguiente y lo
+    descarta si sigue siendo demasiado largo para ser una ciudad."""
+    text = clean_text(value)
+    if not text:
+        return None
+
+    stop = LOCATION_STOP_PATTERN.search(text)
+    if stop:
+        text = clean_text(text[: stop.start()])
+    if not text or len(text) > MAX_DECLARED_CITY_LENGTH:
+        return None
+    return text
+
+
 def extract_location(body_text):
+    """Ubicacion que Marketplace declara para el aviso ('Pasto', 'Cali').
+
+    No puede ser "la primera linea que mencione Pasto": clean_text colapsa los
+    saltos de linea, asi que el texto suele llegar como UNA linea gigante y esa
+    heuristica devolvia la pagina entera (quedo guardada asi en la base). Y al
+    exigir "Pasto" solo podia confirmar Pasto: un aviso de Cali daba None y el
+    filtro de municipio se quedaba justo sin el dato mas confiable.
+    """
+    if not body_text:
+        return None
+
+    for pattern in LOCATION_ANCHOR_PATTERNS:
+        match = pattern.search(body_text)
+        if match:
+            location = _plausible_location(match.group(1))
+            if location:
+                return location
+
     lines = get_lines(body_text)
     for line in lines:
-        norm = normalize_text(line)
-        if "PASTO" in norm and ("NARINO" in norm or "NARI" in norm):
-            return clean_text(line)
+        candidate = _plausible_location(line)
+        if candidate and re.search(r",\s*NARI", normalize_text(candidate)):
+            return candidate
     for line in lines:
-        if "Pasto" in line:
-            return clean_text(line)
+        candidate = _plausible_location(line)
+        if candidate and "PASTO" in normalize_text(candidate):
+            return candidate
     return None
 
 
@@ -1799,15 +2292,27 @@ def extract_publication_data(page, link):
 
     item_id = extract_marketplace_id(link)
     barrio = extract_barrio(title, full_text)
-    ciudad = extract_city(title, full_text)
-    location = embedded.get("location") or extract_location(listing_text) or extract_location(body_text)
+    # La ubicacion se resuelve ANTES de la ciudad: es la ciudad declarada por
+    # Marketplace la que decide, no el texto libre del aviso. La geocodificacion
+    # del JSON manda sobre todo lo demas; raspar texto queda como ultimo recurso.
+    geocoded_city = embedded.get("city")
+    location = (
+        embedded.get("location")
+        or geocoded_city
+        or extract_location(listing_text)
+        or extract_location(body_text)
+    )
+    ciudad = extract_city(title, full_text, location_text=geocoded_city or location)
 
     # La validacion de ciudad usa la ubicacion real declarada por Marketplace
     # (location) como fuente principal, no solo si aparece la palabra "Pasto"
     # en el texto libre (el vendedor puede mencionar "Pasto" como referencia de
     # cercania aunque el inmueble este en otro municipio).
-    if is_explicitly_out_of_city(title, full_text, location_text=location):
-        print(f"[SKIP] Publicacion parece estar fuera de Pasto: {title}")
+    if is_explicitly_out_of_city(title, full_text, location_text=geocoded_city or location):
+        print(
+            f"[SKIP] Publicacion fuera de Pasto (ciudad segun Facebook: "
+            f"{geocoded_city or location or 'sin dato'}): {title}"
+        )
         return None, html, [], "fuera_de_pasto"
 
     # Deteccion de PH: se delega por completo al modulo compartido ph.py (la
@@ -1827,9 +2332,13 @@ def extract_publication_data(page, link):
     seller = extract_seller(page, body_text)
     area_details = extract_area_details(full_text)
 
+    latitud = embedded.get("latitude")
+    longitud = embedded.get("longitude")
+
     notes = {
         "titulo_facebook": title,
         "ubicacion_facebook": location,
+        "ciudad_geocodificada_facebook": geocoded_city,
         "vendedor_facebook": seller,
         "imagenes_detectadas": image_urls,
         "min_sale_price": MIN_SALE_PRICE,
@@ -1842,9 +2351,14 @@ def extract_publication_data(page, link):
         "codigo_externo": f"FB {item_id}" if item_id else None,
         "link_origen": normalize_marketplace_link(link) or link,
         "links_adicionales": json.dumps(notes, ensure_ascii=False),
-        "coordenadas": None,
-        "latitud": None,
-        "longitud": None,
+        # Facebook geocodifica el aviso y deja lat/long en el JSON. Antes se
+        # guardaban siempre en NULL, asi que el detector de duplicados no podia
+        # usar la distancia para comparar contra los otros portales.
+        "coordenadas": (
+            f"{latitud},{longitud}" if latitud is not None and longitud is not None else None
+        ),
+        "latitud": latitud,
+        "longitud": longitud,
         "direccion": clean_text(", ".join(value for value in [barrio, ciudad, "Narino"] if value)),
         "ciudad": ciudad,
         "barrio": barrio,
@@ -2107,6 +2621,12 @@ def main():
         else:
             motivo = "fuente sin publicaciones"
         print(f"[INFO] Modo barrido completo ({motivo}).")
+
+    date_listed_days = resolve_date_listed_days(incremental)
+    if date_listed_days:
+        print(f"[INFO] Ventana de antiguedad: solo publicaciones de los ultimos {date_listed_days} dias.")
+    else:
+        print("[WARN] Sin ventana de antiguedad: se recorre todo el historico del listado.")
 
     print(f"[INFO] Listados Facebook planeados: {len(build_search_urls(incremental))}")
 
