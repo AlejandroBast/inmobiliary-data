@@ -5,6 +5,12 @@ const SESSION_COOKIE = "auth_session"
 const PUBLIC_PATHS = new Set(["/login"])
 
 function isPublicAsset(pathname: string) {
+  // Las rutas de API nunca son assets publicos: las fotos de evidencia se
+  // sirven desde /api/publicaciones/<id>/imagenes/<archivo>.webp y esa misma
+  // ruta expone un DELETE. Sin esta guarda, la extension del archivo alcanzaba
+  // para saltarse la autenticacion.
+  if (pathname.startsWith("/api/")) return false
+
   return (
     pathname.startsWith("/_next") ||
     pathname === "/favicon.ico" ||
