@@ -24,10 +24,15 @@ COLLATE=utf8mb4_unicode_ci;
 CREATE TABLE publicaciones (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
 
-    fuente_id BIGINT NOT NULL,
+    -- Opcional (antes migracion 005, fusionada aca): en la carga manual no
+    -- siempre hay un portal detras. La FK sigue: si se indica, tiene que existir.
+    fuente_id BIGINT NULL,
 
     codigo_externo VARCHAR(100),
-    link_origen TEXT NOT NULL,
+    -- Opcional (antes migracion 004, fusionada aca): en la carga manual el
+    -- cliente anota inmuebles que vio en cualquier lado y no siempre hay link
+    -- publicado. uq_link_origen sigue valiendo porque MySQL admite varios NULL.
+    link_origen TEXT NULL,
     links_adicionales JSON,
 
     fecha_captura TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -46,7 +51,8 @@ CREATE TABLE publicaciones (
 
     descripcion TEXT,
 
-    precio DECIMAL(15,0) NOT NULL,
+    -- Opcional (antes migracion 004): no siempre hay un precio cerrado.
+    precio DECIMAL(15,0) NULL,
 
     m2 DECIMAL(10,2),
 
@@ -85,7 +91,7 @@ CREATE TABLE publicaciones (
 
     UNIQUE KEY uq_link_origen (link_origen(500)),
 
-    CONSTRAINT chk_precio CHECK (precio > 0),
+    CONSTRAINT chk_precio CHECK (precio IS NULL OR precio > 0),
     CONSTRAINT chk_m2 CHECK (m2 IS NULL OR m2 >= 0),
     CONSTRAINT chk_m2_construido CHECK (m2_construido IS NULL OR m2_construido >= 0),
     CONSTRAINT chk_habitaciones CHECK (habitaciones IS NULL OR habitaciones >= 0),
