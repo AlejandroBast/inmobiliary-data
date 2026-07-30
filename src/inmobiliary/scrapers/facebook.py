@@ -149,7 +149,11 @@ SKIP_NON_PASTO_CARDS = os.getenv("FACEBOOK_SKIP_NON_PASTO_CARDS", "true").lower(
 # que es lo que termina restringiendo la cuenta. En 0 se desactiva el corte.
 CONSECUTIVE_OUTSIDE_LIMIT = int(os.getenv("FACEBOOK_CONSECUTIVE_OUTSIDE_LIMIT", "25"))
 STALL_SCROLLS = int(os.getenv("FACEBOOK_STALL_SCROLLS", "4"))
-MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "0"))
+# Tope de avisos por corrida: se cortan las PRIMERAS 50 del listado y se deja de
+# scrollear. Es el limite mas efectivo contra la restriccion de la cuenta porque
+# acota las dos cosas que gastan requests: los scrolls y las paginas de detalle.
+# En 0 se recolecta sin tope.
+MAX_LINKS = int(os.getenv("FACEBOOK_MAX_LINKS", "50"))
 MAX_DETAILS = int(os.getenv("FACEBOOK_MAX_DETAILS", "0"))
 MAX_IMAGES_PER_LISTING = int(os.getenv("FACEBOOK_MAX_IMAGES_PER_LISTING", "12"))
 SCROLL_PAUSE_SECONDS = float(os.getenv("FACEBOOK_SCROLL_PAUSE_SECONDS", "2.5"))
@@ -957,7 +961,9 @@ def collect_publication_links(context, connection=None, fuente_id=None, incremen
         if limit_reason:
             break
 
-        if not separador_visible and listing_new_links > 0:
+        # Si se corto por el tope de avisos no hay nada que avisar: el scroll
+        # termino donde se le pidio, no por haberse quedado sin frenos.
+        if not separador_visible and listing_new_links > 0 and not limit_reason:
             nota = (
                 f"Listado {query_index}: nunca aparecio el encabezado de resultados fuera "
                 f"de la busqueda, asi que el scroll corrio hasta sus otros limites."
@@ -2339,6 +2345,13 @@ def extract_publication_data(page, link):
         "titulo_facebook": title,
         "ubicacion_facebook": location,
         "ciudad_geocodificada_facebook": geocoded_city,
+        # Aproximadas, a nivel de grilla de ciudad: sirven de referencia pero no
+        # identifican el inmueble (ver por que no van a latitud/longitud abajo).
+        "coordenadas_aproximadas_facebook": (
+            {"latitud": latitud, "longitud": longitud}
+            if latitud is not None and longitud is not None
+            else None
+        ),
         "vendedor_facebook": seller,
         "imagenes_detectadas": image_urls,
         "min_sale_price": MIN_SALE_PRICE,
@@ -2351,14 +2364,15 @@ def extract_publication_data(page, link):
         "codigo_externo": f"FB {item_id}" if item_id else None,
         "link_origen": normalize_marketplace_link(link) or link,
         "links_adicionales": json.dumps(notes, ensure_ascii=False),
-        # Facebook geocodifica el aviso y deja lat/long en el JSON. Antes se
-        # guardaban siempre en NULL, asi que el detector de duplicados no podia
-        # usar la distancia para comparar contra los otros portales.
-        "coordenadas": (
-            f"{latitud},{longitud}" if latitud is not None and longitud is not None else None
-        ),
-        "latitud": latitud,
-        "longitud": longitud,
+        # Las coordenadas NO se guardan en estas columnas aunque Facebook las
+        # publique: son aproximadas a proposito (la pagina dice "La ubicacion es
+        # aproximada") y caen en una grilla gruesa. En una corrida real, 51 de 60
+        # avisos compartieron la misma coordenada exacta, con lo que el detector
+        # de duplicados veia distancia 0 m entre inmuebles sin relacion y sumaba
+        # 30 puntos a cada par. Quedan en links_adicionales como referencia.
+        "coordenadas": None,
+        "latitud": None,
+        "longitud": None,
         "direccion": clean_text(", ".join(value for value in [barrio, ciudad, "Narino"] if value)),
         "ciudad": ciudad,
         "barrio": barrio,
@@ -2568,6 +2582,7 @@ def main():
     print(f"[INFO] FACEBOOK_HEADLESS: {HEADLESS}")
     print(f"[INFO] FACEBOOK_DRY_RUN: {DRY_RUN}")
     print(f"[INFO] FACEBOOK_MAX_SCROLLS: {MAX_SCROLLS}")
+    print(f"[INFO] FACEBOOK_MAX_LINKS: {MAX_LINKS if MAX_LINKS > 0 else 'sin tope'}")
     print(f"[INFO] FACEBOOK_MIN_SALE_PRICE: {MIN_SALE_PRICE}")
     print(f"[INFO] FACEBOOK_SPLIT_PRICE_BUCKETS: {SPLIT_PRICE_BUCKETS}")
     print(f"[INFO] FACEBOOK_FULL_SWEEP: {FULL_SWEEP}")
