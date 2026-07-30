@@ -37,9 +37,13 @@ export const tiposInmueble = mysqlTable("tipos_inmueble", {
 
 export const publicaciones = mysqlTable("publicaciones", {
   id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
-  fuenteId: bigint("fuente_id", { mode: "number" }).notNull(),
+  // Opcional desde la migracion 005: en la carga manual no siempre hay un portal
+  // detras. La clave foranea sigue: si se indica una, tiene que existir.
+  fuenteId: bigint("fuente_id", { mode: "number" }),
   codigoExterno: varchar("codigo_externo", { length: 100 }),
-  linkOrigen: text("link_origen").notNull().unique(),
+  // Opcionales desde la migracion 004: en la carga manual el cliente anota
+  // inmuebles que vio en cualquier lado, sin link publicado ni precio cerrado.
+  linkOrigen: text("link_origen").unique(),
   linksAdicionales: json("links_adicionales"),
   fechaCaptura: timestamp("fecha_captura").notNull().defaultNow(),
   coordenadas: text("coordenadas"),
@@ -52,7 +56,7 @@ export const publicaciones = mysqlTable("publicaciones", {
   ph: text("ph"),
   estrato: int("estrato"),
   descripcion: text("descripcion"),
-  precio: decimal("precio", { precision: 15, scale: 0 }).notNull(),
+  precio: decimal("precio", { precision: 15, scale: 0 }),
   m2: decimal("m2", { precision: 10, scale: 2 }),
   precioM2: decimal("precio_m2", { precision: 15, scale: 0 }),
   m2Construido: decimal("m2_construido", { precision: 10, scale: 2 }),
