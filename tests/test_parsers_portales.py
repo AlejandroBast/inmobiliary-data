@@ -268,6 +268,177 @@ def test_facebook_detecta_tipo_de_inmueble():
     assert facebook.extract_property_type("Casa grande", "") == "Casa"
 
 
+# Texto real de una publicacion guardada en la base: clean_text colapsa los
+# saltos de linea, asi que la pagina entera llega como UNA sola linea.
+BLOB_FACEBOOK_UNA_SOLA_LINEA = (
+    "Se vende casa esquinera en barrio San Miguel $ 580 000 000 Inmuebles "
+    "Publicidad Revista Semana NIVEA Iqlick.co. Ubicacion de la vivienda Pasto "
+    "La ubicacion es aproximada Descripcion Se vende hermosa casa en barrio San "
+    "Miguel 5 alcobas 3 banos sala comedor patio de ropas garaje doble Ver menos"
+)
+
+
+def test_facebook_extrae_la_ciudad_del_rotulo_y_no_la_pagina_entera():
+    # Antes devolvia el blob completo: era "la primera linea que diga Pasto" y
+    # el blob es una sola linea. Quedo guardado asi en la base.
+    assert facebook.extract_location(BLOB_FACEBOOK_UNA_SOLA_LINEA) == "Pasto"
+
+
+def test_facebook_no_toma_por_ciudad_un_texto_larguisimo():
+    blob_sin_rotulo = "Vendo casa en el norte de Pasto con patio, garaje doble y tres banos amplios"
+    assert facebook.extract_location(blob_sin_rotulo) is None
+    assert facebook.extract_declared_city(blob_sin_rotulo) is None
+
+
+def test_facebook_extrae_ubicacion_declarada_de_otra_ciudad():
+    # Con la version vieja esto daba None (solo sabia reconocer "Pasto"), y sin
+    # ciudad declarada el aviso se colaba.
+    texto = "Apartamento en venta $ 300 000 000 Ubicacion de la vivienda Cali, Valle del Cauca Descripcion Lindo apto"
+    assert facebook.extract_location(texto) == "Cali, Valle del Cauca"
+
+
+def test_facebook_rechaza_ciudad_declarada_que_no_es_pasto():
+    # Cali no esta en OUT_OF_CITY_KEYWORDS: antes pasaba el filtro y se guardaba
+    # con ciudad='Pasto'.
+    assert facebook.is_explicitly_out_of_city(
+        "Casa en venta", "Hermosa casa", location_text="Cali, Valle del Cauca"
+    ) is True
+    assert facebook.is_explicitly_out_of_city(
+        "Casa en venta", "Hermosa casa", location_text="Cartagena, Bolivar"
+    ) is True
+
+
+def test_facebook_acepta_pasto_y_sus_corregimientos():
+    assert facebook.is_explicitly_out_of_city(
+        "Casa en venta", "Hermosa casa", location_text="Pasto, Narino"
+    ) is False
+    # Algunos avisos declaran el corregimiento en vez de la ciudad.
+    assert facebook.is_pasto_declared_city("CATAMBUCO") is True
+    assert facebook.is_pasto_declared_city("CALI") is False
+
+
+def test_facebook_ubicacion_contaminada_no_decide_el_municipio():
+    # Si el campo vino con basura, se ignora y decide el texto libre, en vez de
+    # rechazar un aviso valido de Pasto.
+    assert facebook.is_explicitly_out_of_city(
+        "Casa en venta en Pasto", "Barrio San Miguel", location_text=BLOB_FACEBOOK_UNA_SOLA_LINEA
+    ) is False
+
+
+def test_facebook_ciudad_sale_de_la_ubicacion_declarada():
+    # Antes devolvia "Pasto" en las dos ramas del if, o sea siempre.
+    assert facebook.extract_city("Casa", "texto", location_text="Cali, Valle del Cauca") == "Cali"
+    assert facebook.extract_city("Casa", "texto", location_text="Pasto, Narino") == "Pasto"
+    assert facebook.extract_city("Casa en Pasto", "texto") == "Pasto"
+
+
+def test_facebook_rechaza_municipios_por_contexto():
+    # Medellin y Bogota no estan en OUT_OF_CITY_KEYWORDS: los cubre el detector
+    # compartido, que exige contexto ("casa en X", "municipio de X").
+    assert facebook.is_explicitly_out_of_city("Casa en venta en Medellin", "") is True
+    assert facebook.is_explicitly_out_of_city("Casa en venta en Ipiales", "") is True
+    assert facebook.is_explicitly_out_of_city("Casa en venta en Pasto", "") is False
+
+
+def test_facebook_no_confunde_el_adjetivo_bello_con_el_municipio():
+    # "Bello" es municipio de Antioquia Y el adjetivo de "bello apartamento".
+    # Buscar el nombre suelto omitia practicamente todos los avisos.
+    assert facebook.is_explicitly_out_of_city("Casa en venta", "Vendo bello apartamento en Pasto") is False
+    assert facebook.is_explicitly_out_of_city("Bella casa en venta", "Muy bello acabado, bella vista") is False
+    assert facebook.is_explicitly_out_of_city("Casa en venta", "Hermosa casa en bello sector") is False
+
+
+# Recorte del JSON embebido tal como viene en el HTML real de Marketplace.
+HTML_GEOCODE_FACEBOOK = (
+    '<script>{"listing":{"location":{"latitude":1.2167358398438,'
+    '"longitude":-77.283325195312,'
+    '"reverse_geocode_detailed":{"city":"Pasto","state":"","postal_code":"520002"},'
+    '"reverse_geocode":{"city":"Pasto","state":"",'
+    '"city_page":{"display_name":"Pasto","id":"108037152563666"}}}}}</script>'
+)
+
+
+def test_facebook_extrae_ciudad_y_coordenadas_de_la_geocodificacion():
+    campos = facebook.extract_embedded_listing_fields(HTML_GEOCODE_FACEBOOK)
+
+    assert campos["city"] == "Pasto"
+    # Antes se guardaban siempre en NULL, sin que el detector de duplicados
+    # pudiera comparar por distancia.
+    assert campos["latitude"] == 1.2167358398438
+    assert campos["longitude"] == -77.283325195312
+
+
+def test_facebook_geocodificacion_de_otra_ciudad_descarta_el_aviso():
+    html = HTML_GEOCODE_FACEBOOK.replace('"city":"Pasto"', '"city":"Bogot\\u00e1"')
+    campos = facebook.extract_embedded_listing_fields(html)
+
+    assert facebook.is_explicitly_out_of_city(
+        "Apartamento en venta", "Lindo apto", location_text=campos["city"]
+    ) is True
+
+
+def test_facebook_sin_geocodificacion_no_revienta():
+    campos = facebook.extract_embedded_listing_fields("<html><body>nada</body></html>")
+
+    assert campos["city"] is None
+    assert campos["latitude"] is None
+    assert campos["longitude"] is None
+
+
+def test_facebook_reconoce_el_encabezado_de_resultados_fuera_de_la_busqueda():
+    # Texto exacto que muestra Marketplace cuando se agotan los avisos de la
+    # ciudad y empieza a rellenar con otras.
+    assert facebook.is_out_of_scope_heading("Resultados relacionados fuera de tu búsqueda") is True
+    # Sin acentos y en otra capitalizacion tiene que dar igual.
+    assert facebook.is_out_of_scope_heading("RESULTADOS RELACIONADOS FUERA DE TU BUSQUEDA") is True
+    assert facebook.is_out_of_scope_heading("Related results outside your search") is True
+
+
+def test_facebook_no_confunde_otros_textos_con_el_encabezado():
+    assert facebook.is_out_of_scope_heading("Resultados de la búsqueda") is False
+    assert facebook.is_out_of_scope_heading("Filtros") is False
+    assert facebook.is_out_of_scope_heading("") is False
+    assert facebook.is_out_of_scope_heading(None) is False
+
+
+def test_facebook_ignora_un_contenedor_que_envuelve_media_pagina():
+    # El textContent de un contenedor grande tambien "contiene" el encabezado. Si
+    # se lo tomara por separador, los resultados buenos quedarian del lado
+    # equivocado y no se recolectaria nada.
+    contenedor = (
+        "Se vende Lote Pasto Se vende casa en el barrio San Ignacio Pasto Vendo casa "
+        "campestre Pasto Resultados relacionados fuera de tu búsqueda Apartamento en "
+        "Bogotá Casa en Fusagasugá y muchas mas publicaciones de relleno"
+    )
+    assert facebook.is_out_of_scope_heading(contenedor) is False
+
+
+def test_facebook_descarta_tarjeta_de_otro_departamento():
+    # Asi se ve una tarjeta del listado: precio, titulo y ubicacion por linea.
+    tarjeta = "$ 320.000.000\nVendo casa de 2 pisos\nFusagasuga, Cundinamarca"
+    assert facebook.card_city_is_outside_pasto(tarjeta) is True
+    assert facebook.card_city_is_outside_pasto("$ 1\nApto\nBogota, D.C.") is True
+
+
+def test_facebook_conserva_tarjeta_de_pasto():
+    tarjeta = "$ 580.000.000\nCasa esquinera barrio San Miguel\nPasto, Narino"
+    assert facebook.card_city_is_outside_pasto(tarjeta) is False
+
+
+def test_facebook_descarta_otro_municipio_de_narino():
+    tarjeta = "$ 90.000.000\nCasa campestre\nIpiales, Narino"
+    assert facebook.card_city_is_outside_pasto(tarjeta) is True
+
+
+def test_facebook_tarjeta_sin_ubicacion_reconocible_se_conserva():
+    # Si no se puede decidir, la publicacion se abre igual: el filtro de detalle
+    # tiene el texto completo. Un cambio de maquetado nunca debe perder avisos.
+    assert facebook.card_city_is_outside_pasto("$ 100\nCasa linda, muy amplia") is False
+    assert facebook.card_city_is_outside_pasto("Pasto") is False
+    assert facebook.card_city_is_outside_pasto("") is False
+    assert facebook.card_city_is_outside_pasto(None) is False
+
+
 def test_facebook_extrae_antiguedad_de_frases_comunes():
     # Antes este campo quedaba siempre en None: Facebook es el unico scraper
     # que nunca lo intentaba extraer.
