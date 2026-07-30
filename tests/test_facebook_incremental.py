@@ -53,6 +53,19 @@ def test_radio_configurable(monkeypatch):
     assert all("radius=" not in url for url in fb.build_search_urls(incremental=True))
 
 
+def test_tope_de_avisos_por_corrida():
+    # Se cortan las primeras 50 del listado: acota los scrolls y las paginas de
+    # detalle, que son las dos cosas que gastan requests.
+    assert fb.MAX_LINKS == 50
+
+
+def test_la_ventana_de_7_dias_es_solo_para_corridas_con_datos_previos():
+    # Con la base vacia se barre 30 dias; los 7 dias son para cuando la fuente ya
+    # tiene publicaciones.
+    assert all("daysSinceListed=30" in url for url in fb.build_search_urls(incremental=False))
+    assert all("daysSinceListed=7" in url for url in fb.build_search_urls(incremental=True))
+
+
 def test_primera_corrida_pide_solo_los_ultimos_30_dias():
     # Traer todo el historico de golpe es lo que restringia la cuenta.
     completo = fb.build_search_urls(incremental=False)
