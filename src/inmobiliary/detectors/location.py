@@ -13,6 +13,9 @@ OUTSIDE_PLACES = {
     "bogota", "bello", "buesaco", "chachagui", "cundinamarca", "girardot",
     "imues", "medellin", "mocoa", "ricaurte", "sandona", "taminango",
 }
+# Municipios cuyo nombre es tambien una palabra corriente del castellano, con su
+# departamento: "bello apartamento" no habla del municipio de Bello (Antioquia).
+AMBIGUOUS_PLACES = {"bello": "antioquia"}
 NOISE_WORDS = re.compile(
     r"\b(?:publicidad|precio|negociable|info(?:rmes?)?|cuenta\s+con|consta\s+de|"
     r"area|valor|contacto|whatsapp|mts?2?|metros?|frente|fondo)\b.*$",
@@ -106,7 +109,20 @@ def detect_outside_municipality(*texts):
     for place in OUTSIDE_PLACES:
         if city == place:
             return place.title()
-        strong_context = rf"\b(?:municipio\s+de|ciudad\s+de|ubicad[oa]\s+en|casa\s+en|apartamento\s+en|lote\s+en|en)\s+(?:el\s+|la\s+)?{re.escape(place)}\b"
+        # Para los nombres que tambien son palabras corrientes se exige que el
+        # nombre cierre la frase o venga seguido de su departamento: un municipio
+        # no lleva un sustantivo pegado detras. Sin esto, "hermosa casa en bello
+        # sector" se leia como el municipio de Bello (Antioquia) y descartaba el
+        # aviso; normalize_text ya convirtio la coma de "Bello, Antioquia" en
+        # espacio, asi que el departamento se busca sin puntuacion.
+        if place in AMBIGUOUS_PLACES:
+            cierre = rf"(?=\s+{AMBIGUOUS_PLACES[place]}\b|\s*$)"
+        else:
+            cierre = ""
+        strong_context = (
+            rf"\b(?:municipio\s+de|ciudad\s+de|ubicad[oa]\s+en|casa\s+en|apartamento\s+en|"
+            rf"lote\s+en|en)\s+(?:el\s+|la\s+)?{re.escape(place)}\b{cierre}"
+        )
         if re.search(strong_context, combined) or place == "cundinamarca" and re.search(r"\bcundinamarca\b", combined):
             return place.title()
     return None
