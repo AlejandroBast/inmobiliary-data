@@ -1,4 +1,4 @@
-from inmobiliary.detectors.location import resolve_pasto_location
+from inmobiliary.detectors.location import detect_outside_municipality, resolve_pasto_location
 
 
 def test_aliases_seguros():
@@ -49,3 +49,19 @@ def test_municipio_externo_prevalece():
     result = resolve_pasto_location("Arizona", city="Pasto", description="Casa en el municipio de Chachagüí")
     assert result.value is None
     assert result.outside_municipality == "Chachagui"
+
+
+def test_bello_como_adjetivo_no_es_el_municipio():
+    # "Bello" es municipio de Antioquia y tambien el adjetivo de uso diario. Si
+    # se lo toma por municipio se descartan avisos validos en masa: media
+    # Colombia vende "bellos apartamentos".
+    assert detect_outside_municipality(None, "Hermosa casa en bello sector") is None
+    assert detect_outside_municipality(None, "Vendo bello apartamento en Pasto") is None
+    assert detect_outside_municipality(None, "Casa en bello barrio de Pasto") is None
+
+
+def test_bello_como_municipio_si_se_detecta():
+    # Cierra la frase o viene con su departamento: ahi si es el municipio.
+    assert detect_outside_municipality(None, "Vendo casa en Bello") == "Bello"
+    assert detect_outside_municipality(None, "Casa en Bello, Antioquia") == "Bello"
+    assert detect_outside_municipality("bello") == "Bello"
