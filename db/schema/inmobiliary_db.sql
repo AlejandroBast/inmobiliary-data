@@ -217,3 +217,31 @@ CREATE TABLE coincidencias_publicaciones (
 ) ENGINE=InnoDB
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_unicode_ci;
+
+
+-- =========================================================
+-- CATALOGOS DE BARRIOS Y TIPOS DE INMUEBLE
+-- =========================================================
+-- Fusionado aca desde la migracion 003 (db/migrations/003_catalogos_ubicacion_tipo.sql):
+-- recrear la base solo con este archivo dejaba estas dos tablas sin crear,
+-- rompiendo el front con "Table 'barrios' doesn't exist" hasta que alguien
+-- se acordaba de correr esa migracion aparte. Quedan vacias: para poblarlas
+-- corre scripts/seed_catalogos.py --apply despues de crear la base.
+
+CREATE TABLE barrios (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(150) NOT NULL,
+    nombre_normalizado VARCHAR(150) NOT NULL,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_barrios_normalizado (nombre_normalizado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE tipos_inmueble (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(80) NOT NULL,
+    nombre_normalizado VARCHAR(80) NOT NULL,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_tipos_inmueble_normalizado (nombre_normalizado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
