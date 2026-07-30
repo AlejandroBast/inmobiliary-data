@@ -32,7 +32,7 @@ db/
 ├─ schema/              esquema base
 ├─ migrations/          migraciones numeradas + sus reversas
 └─ queries/             consultas sueltas
-tests/                  111 pruebas (no necesitan MySQL ni Playwright)
+tests/                  125 pruebas (no necesitan MySQL ni Playwright)
 docs/                   documentación
 front/                  aplicación Next.js
 data/                   catálogo de barrios y veredas de Pasto
@@ -158,7 +158,7 @@ py -3 -m inmobiliary.scrapers.facebook
 ### Pruebas
 
 ```powershell
-py -3 -m pytest -q               # las 111
+py -3 -m pytest -q               # las 125
 py -3 -m pytest -q -k parsers    # solo los extractores
 ```
 
@@ -221,6 +221,8 @@ Corre en `http://localhost:3001`. El botón de escanear ejecuta los scrapers con
 | `DUPLICATE_MIN_IMAGE_WIDTH` | `200` | Descarta íconos y logos |
 | `DUPLICATE_MIN_IMAGE_HEIGHT` | `150` | |
 | `DUPLICATE_BACKFILL_BATCH_SIZE` | `100` | Lote del backfill |
+| `DUPLICATE_PERCEPTUAL_MAX_DISTANCE` | `6` | Distancia dHash máxima para tratar dos fotos como la misma |
+| `DUPLICATE_PRICE_MAX_DIFFERENCE` | `0.30` | Brecha de precio desde la cual se penaliza el par |
 
 ### Por portal
 
@@ -330,6 +332,13 @@ Traer todo de una sola vez es lo que provocaba la **restricción temporal de la
 cuenta** alrededor de las 300 publicaciones recolectadas: la ventana recorta
 tanto los scrolls del listado como las visitas a páginas de detalle.
 
+Además hay un **tope de 50 avisos por corrida** (`FACEBOOK_MAX_LINKS`): se toman
+las 50 primeras del listado y ahí se deja de scrollear. Es el límite más efectivo
+contra la restricción, porque acota de una vez las dos cosas que gastan requests.
+El tope cuenta **links recolectados**, no guardados: de esos 50, los que sean
+arriendo, no tengan precio o estén fuera de Pasto se descartan después, así que
+en la base quedan menos de 50.
+
 Marketplace solo respeta `1`, `7` y `30` en ese filtro; con otro valor ignora el
 filtro y devuelve el listado entero. El scraper avisa con `[WARN]` si le pasás
 uno distinto, pero lo usa igual.
@@ -392,7 +401,7 @@ py -3 -m inmobiliary.scrapers.facebook
 | `FACEBOOK_INCLUDE_UNFILTERED_LISTING` | `true` | Revisa primero el listado general |
 | `FACEBOOK_MAX_SCROLLS` | `80` | Scrolls máximos por listado |
 | `FACEBOOK_STALL_SCROLLS` | `4` | Corta tras N scrolls sin links nuevos |
-| `FACEBOOK_MAX_LINKS` | `0` (sin tope) | |
+| `FACEBOOK_MAX_LINKS` | `50` | Corta al juntar las primeras 50 del listado. `0` = sin tope |
 | `FACEBOOK_MAX_DETAILS` | `0` (sin tope) | |
 | `FACEBOOK_MAX_IMAGES_PER_LISTING` | `12` | |
 | `FACEBOOK_MIN_SALE_PRICE` | `10000000` | Evita guardar números que no son precio |
