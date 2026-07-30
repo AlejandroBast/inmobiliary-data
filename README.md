@@ -120,6 +120,26 @@ py -3 scripts/seed_catalogos.py --apply
 | `001_duplicate_detection.sql` | Crea las 4 tablas del detector de duplicados |
 | `002_exact_image_hash.sql` | Agrega el hash SHA-256 exacto a las imágenes |
 | `003_catalogos_ubicacion_tipo.sql` | Crea `barrios` y `tipos_inmueble` (ya fusionado en el esquema base; este archivo queda solo para bases muy viejas) |
+| `004_carga_manual_campos_opcionales.sql` | `link_origen` y `precio` pasan a opcionales, para carga manual libre (ya fusionado en el esquema base) |
+| `005_fuente_opcional.sql` | `fuente_id` pasa a opcional (ya fusionado en el esquema base) |
+
+#### Carga manual libre
+
+Para que el cliente pueda anotar un inmueble que vio en cualquier lado, las tres
+columnas que antes bloqueaban el alta son opcionales: **`fuente_id`,
+`link_origen` y `precio`**. Se puede guardar una publicación solo con barrio y
+descripción.
+
+Lo que **sí** se sigue validando, porque protege los datos y no estorba a nadie:
+
+- Si se indica una fuente, tiene que existir (la clave foránea sigue en pie).
+- Si se indica un precio, tiene que ser mayor a 0 (`chk_precio`).
+- Dos publicaciones sin link no chocan entre sí: MySQL admite varios `NULL` en
+  un índice `UNIQUE`.
+
+> Sin `link_origen` no hay deduplicación por link, que es la que usan los
+> scrapers y el import del Excel. Las publicaciones cargadas a mano se comparan
+> por imágenes y precio, como el resto.
 
 Cada una tiene su `_down.sql` para revertirla. Los scripts `apply_*` son
 **idempotentes**: si las tablas ya existen no hacen nada y lo informan.
@@ -154,6 +174,47 @@ py -3 -m inmobiliary.scrapers.facebook
 | `py -3 scripts/seed_catalogos.py` | Puebla `barrios` y `tipos_inmueble` |
 | `py -3 scripts/backfill_duplicate_detection.py` | Reanaliza duplicados en publicaciones ya guardadas |
 | `py -3 scripts/backfill_location_normalization.py` | Renormaliza los barrios ya guardados |
+| `py -3 scripts/import_excel_ventas.py <archivo.xlsx>` | Importa la hoja **Ventas** del Excel del cliente (ver abajo) |
+
+### Importar el Excel del cliente
+
+El estudio de mercado del cliente trae una hoja `Ventas` con ~3200 filas. El
+script la vuelca a `publicaciones` aplicando las mismas reglas que los scrapers.
+
+**Siempre corre en dry-run primero: es el modo por defecto.** No escribe nada,
+solo deja un reporte en `logs/import_excel/`.
+
+```powershell
+# 1. Simulacro: dice cuantas entrarian y por que se descarta cada una
+py -3 scripts/import_excel_ventas.py "21. Estudio de mercado Pasto (1) (1) (1).xlsx"
+
+# 2. Si el resumen cierra, escribir de verdad
+py -3 scripts/import_excel_ventas.py "21. Estudio de mercado Pasto (1) (1) (1).xlsx" --apply
+
+# 3. Poblar los catalogos con los barrios y tipos que trajo el Excel
+py -3 scripts/seed_catalogos.py --apply
+```
+
+El paso 3 no es opcional: sin él, el formulario de edicion del front falla con
+*"Tipo de inmueble inválido: no existe en el catálogo"*, porque valida contra
+`tipos_inmueble`.
+
+**Qué hace con cada fila**
+
+| Regla | Detalle |
+|---|---|
+| Fuente | Se deduce del dominio del link (`fincaraiz` → Fincaraiz, etc.). Sin link reconocible queda como **Cliente** |
+| Duplicados | Salta la fila si el `link_origen` o el `codigo_externo` ya existen, igual que los scrapers |
+| Descartes | Sin precio, sin link, o detectada fuera de Pasto |
+| `PH - <nombre>` en barrio | Se separa: eso es el nombre del conjunto, no un barrio |
+| Columnas sin lugar propio | `link 2`, `link 3`, concepto, avalúo catastral y las fechas del Excel van a `links_adicionales` (JSON), marcadas con `fuente_importacion` |
+
+No toca el esquema ni modifica publicaciones existentes: solo inserta.
+
+> El Excel **no trae imágenes**, así que estas publicaciones quedan sin evidencia
+> y sin hashes. La detección de duplicados se apoya sobre todo en las fotos, así
+> que sobre datos importados va a encontrar mucho menos que sobre datos
+> scrapeados. El import tampoco la dispara: hay que correr el backfill aparte.
 
 ### Pruebas
 
