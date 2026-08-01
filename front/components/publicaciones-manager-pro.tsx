@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useRef, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -40,6 +40,9 @@ import { formatCOP, formatDate, formatNumber } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Bath,
   BedDouble,
   Building2,
@@ -298,12 +301,31 @@ export function PublicacionesManagerPro({
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
+  const [precioSort, setPrecioSort] = useState<"asc" | "desc" | null>(null)
   const router = useRouter()
 
-  const totalPages = Math.max(1, Math.ceil(publicaciones.length / pageSize))
+  function togglePrecioSort() {
+    setPrecioSort((current) => current === "asc" ? "desc" : current === "desc" ? null : "asc")
+    setCurrentPage(1)
+  }
+
+  const sortedPublicaciones = useMemo(() => {
+    if (!precioSort) return publicaciones
+
+    return [...publicaciones].sort((first, second) => {
+      const firstPrecio = first.precio === null || first.precio === undefined ? null : Number(first.precio)
+      const secondPrecio = second.precio === null || second.precio === undefined ? null : Number(second.precio)
+      if (firstPrecio === null && secondPrecio === null) return 0
+      if (firstPrecio === null) return 1
+      if (secondPrecio === null) return -1
+      return precioSort === "asc" ? firstPrecio - secondPrecio : secondPrecio - firstPrecio
+    })
+  }, [publicaciones, precioSort])
+
+  const totalPages = Math.max(1, Math.ceil(sortedPublicaciones.length / pageSize))
   const safePage = Math.min(currentPage, totalPages)
   const pageStart = (safePage - 1) * pageSize
-  const visiblePublicaciones = publicaciones.slice(pageStart, pageStart + pageSize)
+  const visiblePublicaciones = sortedPublicaciones.slice(pageStart, pageStart + pageSize)
 
   useEffect(() => {
     setCurrentPage(1)
@@ -583,7 +605,23 @@ export function PublicacionesManagerPro({
                   <TableHead className="w-[110px]">Barrio</TableHead>
                   <TableHead className="w-[180px]">PH</TableHead>
                   <TableHead className="w-[90px]">Fuente</TableHead>
-                  <TableHead className="w-[130px] text-right">Precio</TableHead>
+                  <TableHead className="w-[130px] text-right">
+                    <button
+                      type="button"
+                      onClick={togglePrecioSort}
+                      className="ml-auto flex items-center gap-1 hover:text-primary"
+                      aria-label="Ordenar por precio"
+                    >
+                      Precio
+                      {precioSort === "asc" ? (
+                        <ArrowUp className="size-3.5" />
+                      ) : precioSort === "desc" ? (
+                        <ArrowDown className="size-3.5" />
+                      ) : (
+                        <ArrowUpDown className="size-3.5 text-muted-foreground" />
+                      )}
+                    </button>
+                  </TableHead>
                   <TableHead className="w-[80px] text-right">Area</TableHead>
                   <TableHead className="w-[90px] text-right">$/m2</TableHead>
                   <TableHead className="w-[110px]">Caracteristicas</TableHead>
