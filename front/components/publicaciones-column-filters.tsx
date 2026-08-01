@@ -13,14 +13,14 @@ type ColumnFilters = {
   precioMin: string; precioMax: string; m2Min: string; m2Max: string
   phTipo: string; duplicados: string
 }
-type FilterGroup = "id" | "publicacion" | "ubicacion" | "fuente" | "precio" | "area" | "caracteristicas" | "fecha"
+type FilterGroup = "id" | "publicacion" | "ubicacion" | "ph" | "fuente" | "precio" | "area" | "caracteristicas" | "fecha"
 
 const filterKeys: Array<keyof ColumnFilters> = [
   "id", "tipoInmueble", "fuenteId", "fecha", "habitaciones", "banios", "parqueadero",
   "barrio", "precioMin", "precioMax", "m2Min", "m2Max", "phTipo", "duplicados",
 ]
 const groupKeys: Record<FilterGroup, Array<keyof ColumnFilters>> = {
-  id: ["id"], publicacion: ["tipoInmueble", "phTipo", "duplicados"], ubicacion: ["barrio"],
+  id: ["id"], publicacion: ["tipoInmueble", "duplicados"], ubicacion: ["barrio"], ph: ["phTipo"],
   fuente: ["fuenteId"], precio: ["precioMin", "precioMax"], area: ["m2Min", "m2Max"],
   caracteristicas: ["habitaciones", "banios", "parqueadero"], fecha: ["fecha"],
 }
@@ -90,7 +90,7 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
       <th className="p-1">{button("id", "Filtrar")}</th>
       <th className="p-1">{button("publicacion", "Filtrar")}</th>
       <th className="p-1">{button("ubicacion", "Filtrar")}</th>
-      <th className="p-1">{button("publicacion", "Filtrar")}</th>
+      <th className="p-1">{button("ph", "Filtrar")}</th>
       <th className="p-1">{button("fuente", "Filtrar")}</th>
       <th className="p-1">{button("precio", "Filtrar")}</th>
       <th className="p-1">{button("area", "Filtrar")}</th>
@@ -107,10 +107,10 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
             {openGroup === "id" && <Input type="number" placeholder="ID exacto" value={values.id} onChange={(e) => setField("id", e.target.value)} className={inputClass} />}
             {openGroup === "publicacion" && <>
               <select value={values.tipoInmueble} onChange={(e) => setField("tipoInmueble", e.target.value)} className={selectClass}><option value="">Todos los tipos</option>{tiposInmueble.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-              <select value={values.phTipo} onChange={(e) => setField("phTipo", e.target.value)} className={selectClass}><option value="">Todo PH</option><option value="ph">Con PH</option><option value="normal">Sin PH</option></select>
               <select value={values.duplicados} onChange={(e) => setField("duplicados", e.target.value)} className={selectClass}><option value="">Todas</option><option value="con">Repetidas</option><option value="sin">No repetidas</option></select>
             </>}
             {openGroup === "ubicacion" && <select value={values.barrio} onChange={(e) => setField("barrio", e.target.value)} className={selectClass}><option value="">Todos los barrios</option>{hasSinBarrio && <option value="__sin_barrio">Sin barrio</option>}{barrios.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>}
+            {openGroup === "ph" && <select value={values.phTipo} onChange={(e) => setField("phTipo", e.target.value)} className={selectClass}><option value="">Todo PH</option><option value="ph">Con PH</option><option value="normal">Sin PH</option></select>}
             {openGroup === "fuente" && <select value={values.fuenteId} onChange={(e) => setField("fuenteId", e.target.value)} className={selectClass}><option value="">Todas las fuentes</option>{fuentes.map((item) => <option key={item.id} value={String(item.id)}>{item.nombre}</option>)}</select>}
             {openGroup === "precio" && <><Input type="number" placeholder="Precio minimo (millones)" value={values.precioMin} onChange={(e) => setField("precioMin", e.target.value)} className={inputClass} /><Input type="number" placeholder="Precio maximo (millones)" value={values.precioMax} onChange={(e) => setField("precioMax", e.target.value)} className={inputClass} /></>}
             {openGroup === "area" && <><Input type="number" placeholder="Area minima m2" value={values.m2Min} onChange={(e) => setField("m2Min", e.target.value)} className={inputClass} /><Input type="number" placeholder="Area maxima m2" value={values.m2Max} onChange={(e) => setField("m2Max", e.target.value)} className={inputClass} /></>}
