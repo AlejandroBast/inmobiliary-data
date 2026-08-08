@@ -165,6 +165,40 @@ py -3 -m inmobiliary.scrapers.amorel
 py -3 -m inmobiliary.scrapers.facebook
 ```
 
+### Corridas automáticas (cron)
+
+`scripts/run_scheduled_scrapers.py` corre los scrapers **uno detrás de otro,
+nunca en paralelo**: la VM del servidor tiene recursos limitados y no aguanta
+varios navegadores de Playwright a la vez. El propio script decide qué correr
+según el día:
+
+| Día | Qué corre |
+|---|---|
+| Lunes | Los cinco portales en orden: fincaraiz → ciencuadras → metrocuadrado → amorel → facebook |
+| Viernes | Solo Facebook Marketplace (el inventario ahí cambia más rápido, así que se refresca dos veces por semana) |
+| Resto de días | Nada |
+
+Si un scraper falla, queda el error anotado en el log y el orquestador sigue
+con el siguiente en vez de abortar toda la corrida.
+
+```powershell
+py -3 scripts/run_scheduled_scrapers.py              # según el día de hoy
+py -3 scripts/run_scheduled_scrapers.py --day friday  # fuerza un día, para probar
+py -3 scripts/run_scheduled_scrapers.py --dry-run      # imprime el plan sin ejecutar nada
+```
+
+Cada corrida queda en `logs/scheduled/AAAA-MM-DD_dia.log`.
+
+En el servidor (Linux), la entrada de `crontab -e` para el mediodía de lunes
+y viernes:
+
+```cron
+0 12 * * 1,5 /ruta/al/repo/.venv/bin/python /ruta/al/repo/scripts/run_scheduled_scrapers.py >> /ruta/al/repo/logs/scheduled/cron.log 2>&1
+```
+
+El script resuelve rutas por su propia ubicación (no depende del `cwd` de
+cron) y usa `SCRAPER_PYTHON` si está definida, igual que el front.
+
 ### Scripts operativos
 
 | Comando | Qué hace |
