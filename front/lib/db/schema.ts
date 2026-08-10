@@ -75,7 +75,19 @@ export const publicaciones = mysqlTable("publicaciones", {
   banios: int("banios"),
   parqueadero: int("parqueadero"),
   administracion: decimal("administracion", { precision: 15, scale: 0 }),
+  // Cache liviano de la nota mas reciente (la usa la columna "Nota" del
+  // listado); el historial completo vive en publicacion_notas.
   notas: text("notas"),
+  fechaNota: timestamp("fecha_nota"),
+})
+
+// Historial de notas por publicacion (migracion 008): cada "Agregar nota" es
+// una fila propia en vez de pisar la anterior.
+export const publicacionNotas = mysqlTable("publicacion_notas", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  publicacionId: bigint("publicacion_id", { mode: "number" }).notNull(),
+  contenido: text("contenido").notNull(),
+  fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
 })
 
 export type Publicacion = typeof publicaciones.$inferSelect
@@ -83,3 +95,4 @@ export type Fuente = typeof fuentesInmobiliarias.$inferSelect
 export type Barrio = typeof barrios.$inferSelect
 export type TipoInmueble = typeof tiposInmueble.$inferSelect
 export type PhConjunto = typeof phConjuntos.$inferSelect
+export type PublicacionNota = typeof publicacionNotas.$inferSelect
