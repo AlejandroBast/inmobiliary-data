@@ -73,6 +73,7 @@ def get_or_create_fuente_id(connection):
 
 TIPOS_INMUEBLE = [
     "Apartamento",
+    "Apartaestudio",
     "Casa lote",
     "Casa",
     "Lote",
