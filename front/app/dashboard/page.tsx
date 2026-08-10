@@ -2,6 +2,7 @@ import {
   getBarrios,
   getCoincidenciasPublicaciones,
   getFuentes,
+  getPhNombres,
   getPublicaciones,
   getPublicacionesTotal,
   getTiposInmueble,
@@ -62,12 +63,13 @@ export default async function DashboardPage({
     parqueadero: firstValue(params.parqueadero),
   }
 
-  const [publicaciones, fuentes, barriosData, totalPublicaciones, tiposInmueble] = await Promise.all([
+  const [publicaciones, fuentes, barriosData, totalPublicaciones, tiposInmueble, phData] = await Promise.all([
     getPublicaciones(filtros),
     getFuentes(),
     getBarrios(),
     getPublicacionesTotal(),
     getTiposInmueble(),
+    getPhNombres(),
   ])
   const coincidencias = await getCoincidenciasPublicaciones(publicaciones.map((publicacion) => publicacion.id))
   const publicacionesConCoincidencias = publicaciones.map((publicacion) => ({
@@ -102,7 +104,9 @@ export default async function DashboardPage({
           fuentes={fuentes}
           barrios={barriosData.barrios}
           tiposInmueble={tiposInmueble}
+          phNombres={phData.ph}
           hasSinBarrio={barriosData.hasSinBarrio}
+          hasSinPh={phData.hasSinPh}
           initialValues={{
             id: filtros.id ?? undefined,
             tipoInmueble: filtros.tipoInmueble ?? undefined,
