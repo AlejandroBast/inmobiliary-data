@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useMemo, useState, useTransition } from "react"
+import { useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -32,10 +32,10 @@ import {
   withCreateOption,
 } from "@/components/ui/combobox"
 import { toast } from "sonner"
-import { createPublicacion, updatePublicacion, type PublicacionInput } from "@/app/actions/publicaciones"
+import { createPublicacion, setManualLinkStatus, updatePublicacion, type PublicacionInput } from "@/app/actions/publicaciones"
 import type { Fuente } from "@/lib/db/schema"
 import { NuevaFuenteDialog } from "./nueva-fuente-dialog"
-import { ImageIcon, Loader2, X } from "lucide-react"
+import { ImageIcon, Loader2, Upload, X } from "lucide-react"
 
 type Row = Record<string, unknown> & { id: number }
 type ImageItem = { name: string; src: string }
@@ -78,14 +78,52 @@ export function PublicacionForm({
   const [images, setImages] = useState<ImageItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
   const [deletingImage, setDeletingImage] = useState<string | null>(null)
+  const [manualUnavailable, setManualUnavailable] = useState(false)
+  const [manualSaving, setManualSaving] = useState(false)
+  // En edicion se sube directo (ya hay id). En creacion todavia no existe la
+  // publicacion, asi que los archivos se guardan aca hasta el submit y se
+  // suben recien cuando createPublicacion devuelve el id nuevo.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [uploadingImages, setUploadingImages] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setFuenteId(editing ? String(editing.fuenteId) : "")
     setBarrio(editing ? val("barrio") : "")
     setTipoInmueble(editing ? val("tipoInmueble") : "")
+    const raw = editing?.linksAdicionales
+    const manual = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check_manual : null
+    const manualOk = manual && typeof manual === "object" ? (manual as Record<string, unknown>).ok : null
+    setManualUnavailable(manualOk === false)
   }, [editing])
 
+  // Marca/quita el link como no disponible al toque, sin esperar a "Guardar
+  // cambios": ese submit reemplaza toda la columna links_adicionales (ver
+  // handleSubmit) y borraria esta marca junto con la metadata del scraper si
+  // fuera parte del mismo guardado.
+  async function toggleManualUnavailable() {
+    if (!editing || manualSaving) return
+    const next = !manualUnavailable
+    setManualSaving(true)
+    try {
+      const res = await setManualLinkStatus(editing.id, next)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      setManualUnavailable(next)
+      toast.success(next ? "Link marcado como no disponible." : "Se quito la marca manual.")
+    } catch {
+      toast.error("No se pudo actualizar el estado del link.")
+    } finally {
+      setManualSaving(false)
+    }
+  }
+
   useEffect(() => {
+    setPendingFiles([])
+    if (fileInputRef.current) fileInputRef.current.value = ""
+
     if (!open || !editing) {
       setImages([])
       setImagesLoading(false)
@@ -107,6 +145,58 @@ export function PublicacionForm({
 
     return () => controller.abort()
   }, [editing, open])
+
+  // Previsualizaciones locales de los archivos en espera (modo creacion, ver
+  // pendingFiles). Se revocan al desmontar o cuando cambia la lista para no
+  // dejar URLs de objeto colgadas.
+  const pendingPreviews = useMemo(
+    () => pendingFiles.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [pendingFiles],
+  )
+  useEffect(() => {
+    return () => {
+      pendingPreviews.forEach((item) => URL.revokeObjectURL(item.url))
+    }
+  }, [pendingPreviews])
+
+  async function uploadImages(publicacionId: number, files: File[]) {
+    const formData = new FormData()
+    files.forEach((file) => formData.append("files", file))
+    const response = await fetch(`/api/publicaciones/${publicacionId}/imagenes`, { method: "POST", body: formData })
+    return response.json() as Promise<{ success: boolean; error?: string; images?: ImageItem[]; skipped?: string[] }>
+  }
+
+  async function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return
+    const files = Array.from(fileList)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+
+    if (!editing) {
+      setPendingFiles((current) => [...current, ...files])
+      return
+    }
+
+    setUploadingImages(true)
+    try {
+      const result = await uploadImages(editing.id, files)
+      if (!result.success) {
+        toast.error(result.error || "No se pudieron subir las imagenes.")
+        return
+      }
+      const uploaded = result.images ?? []
+      setImages((current) => [...current, ...uploaded])
+      const skippedNote = result.skipped?.length ? ` (${result.skipped.length} archivo(s) descartados: formato o tamaño invalido)` : ""
+      toast.success(`${uploaded.length} imagen${uploaded.length === 1 ? "" : "es"} subida${uploaded.length === 1 ? "" : "s"}.${skippedNote}`)
+    } catch {
+      toast.error("No se pudieron subir las imagenes.")
+    } finally {
+      setUploadingImages(false)
+    }
+  }
+
+  function removePendingFile(file: File) {
+    setPendingFiles((current) => current.filter((item) => item !== file))
+  }
 
   async function deleteImage(image: ImageItem) {
     if (!editing || deletingImage) return
@@ -188,15 +278,36 @@ export function PublicacionForm({
     }
 
     startTransition(async () => {
-      const res = editing
-        ? await updatePublicacion(editing.id, input)
-        : await createPublicacion(input)
-      if (res.success) {
-        toast.success(editing ? "Publicación actualizada." : "Publicación creada.")
+      if (editing) {
+        const res = await updatePublicacion(editing.id, input)
+        if (!res.success) {
+          toast.error(res.error)
+          return
+        }
+        toast.success("Publicación actualizada.")
         onOpenChange(false)
-      } else {
-        toast.error(res.error)
+        return
       }
+
+      const res = await createPublicacion(input)
+      if (!res.success) {
+        toast.error(res.error)
+        return
+      }
+      toast.success("Publicación creada.")
+
+      // Las imagenes elegidas antes de guardar recien se pueden subir aca:
+      // hasta este punto no existia el id de la publicacion nueva.
+      if (res.id && pendingFiles.length > 0) {
+        const uploadResult = await uploadImages(res.id, pendingFiles)
+        if (uploadResult.success) {
+          const count = uploadResult.images?.length ?? 0
+          toast.success(`${count} imagen${count === 1 ? "" : "es"} subida${count === 1 ? "" : "s"}.`)
+        } else {
+          toast.error(uploadResult.error || "La publicación se creó, pero no se pudieron subir las imágenes.")
+        }
+      }
+      onOpenChange(false)
     })
   }
 
@@ -253,6 +364,27 @@ export function PublicacionForm({
               <Label htmlFor="linkOrigen">Link de origen</Label>
               <Input id="linkOrigen" name="linkOrigen" type="url" defaultValue={val("linkOrigen")} placeholder="https://... (opcional)" />
             </div>
+            {editing && (
+              <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="space-y-0.5">
+                  <p className="text-sm font-medium">Estado del link</p>
+                  <p className="text-xs text-muted-foreground">
+                    {manualUnavailable
+                      ? "Marcado manualmente como no disponible: se muestra en rojo en el listado."
+                      : "Marca el link como no disponible si sabes que ya no lleva a la publicación (p. ej. páginas que responden 200 pero muestran \"aviso no encontrado\")."}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant={manualUnavailable ? "outline" : "destructive"}
+                  size="sm"
+                  disabled={manualSaving}
+                  onClick={() => void toggleManualUnavailable()}
+                >
+                  {manualSaving ? <Loader2 className="size-4 animate-spin" /> : manualUnavailable ? "Quitar marca" : "Marcar no disponible"}
+                </Button>
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="linksAdicionales">Links adicionales (uno por línea)</Label>
               <Textarea
@@ -414,13 +546,42 @@ export function PublicacionForm({
             </div>
           </fieldset>
 
-          {editing && (
-            <fieldset className="space-y-3">
+          <fieldset className="space-y-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <legend className="text-sm font-medium text-muted-foreground">Imagenes guardadas</legend>
-                <p className="text-xs text-muted-foreground">Elimina las capturas que no correspondan a esta publicacion.</p>
+                <legend className="text-sm font-medium text-muted-foreground">Imagenes</legend>
+                <p className="text-xs text-muted-foreground">
+                  {editing
+                    ? "Sube capturas adicionales o elimina las que no correspondan a esta publicacion."
+                    : "Opcional: elige imagenes para subir. Se guardan cuando crees la publicacion."}
+                </p>
               </div>
-              {imagesLoading ? (
+              <div className="shrink-0">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  className="hidden"
+                  id="imagen-upload-input"
+                  onChange={(event) => void handleFilesSelected(event.target.files)}
+                  disabled={uploadingImages}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={uploadingImages}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploadingImages ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  {uploadingImages ? "Subiendo..." : "Subir imagenes"}
+                </Button>
+              </div>
+            </div>
+
+            {editing && (
+              imagesLoading ? (
                 <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
                   <Loader2 className="size-4 animate-spin" /> Cargando imagenes...
                 </div>
@@ -451,9 +612,39 @@ export function PublicacionForm({
                     </div>
                   ))}
                 </div>
-              )}
-            </fieldset>
-          )}
+              )
+            )}
+
+            {!editing && (
+              pendingPreviews.length === 0 ? (
+                <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                  <ImageIcon className="size-4" /> Todavia no elegiste imagenes.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {pendingPreviews.map(({ file, url }) => (
+                    <div key={url} className="group relative overflow-hidden rounded-lg border bg-muted">
+                      <img src={url} alt={file.name} className="aspect-[4/3] w-full object-cover transition group-hover:brightness-75" loading="lazy" />
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="icon"
+                        className="absolute right-2 top-2 size-9 rounded-full border-2 border-white bg-destructive text-white opacity-0 shadow-lg transition hover:bg-destructive/90 group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label={`Quitar ${file.name}`}
+                        title="Quitar imagen"
+                        onClick={() => removePendingFile(file)}
+                      >
+                        <X className="size-5 stroke-[3]" />
+                      </Button>
+                      <div className="absolute inset-x-0 bottom-0 truncate bg-black/65 px-2 py-1.5 text-xs text-white opacity-0 transition group-hover:opacity-100" title={file.name}>
+                        {file.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            )}
+          </fieldset>
         </form>
 
         <DialogFooter>
