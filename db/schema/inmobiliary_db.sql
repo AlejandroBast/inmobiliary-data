@@ -251,3 +251,20 @@ CREATE TABLE tipos_inmueble (
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_tipos_inmueble_normalizado (nombre_normalizado)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- Fusionado aca desde la migracion 006 (db/migrations/006_catalogo_ph.sql):
+-- catalogo de PH (conjuntos/edificios/condominios) de Pasto. Se usa para
+-- reconocer el nombre exacto de un PH dentro de titulo/descripcion aunque el
+-- aviso nunca diga "PH" ni "conjunto" (ver inmobiliary.detectors.ph). Queda
+-- vacia: para poblarla corre scripts/seed_catalogos.py --apply despues de
+-- crear la base.
+
+CREATE TABLE ph_conjuntos (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    nombre VARCHAR(150) NOT NULL,
+    nombre_normalizado VARCHAR(150) NOT NULL,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_ph_conjuntos_normalizado (nombre_normalizado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
