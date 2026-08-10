@@ -715,10 +715,10 @@ def extract_conjunto_edificio(title, description):
 
 
 def extract_ph_value(text, edificio_conjunto=None):
-    # Delega la deteccion generica (negacion + keywords) al modulo compartido
-    # ph_detector; edificio_conjunto sigue viniendo de extract_conjunto_edificio,
-    # que es mas preciso que cualquier regex generica porque ya usa el
-    # LOCATION_STOP y el limpiador de nombres propios de este scraper.
+    # Delega la deteccion (negacion + match contra el catalogo) al modulo
+    # compartido ph_detector; edificio_conjunto se pasa como texto de busqueda
+    # extra, pero el nombre que termina en publicaciones.ph siempre sale del
+    # catalogo (data/pasto_ph.tsv), nunca del regex de este scraper.
     return detect_ph(text, complex_name=edificio_conjunto)
 
 
