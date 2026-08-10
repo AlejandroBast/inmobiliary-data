@@ -82,6 +82,7 @@ CREATE TABLE publicaciones (
     administracion DECIMAL(15,0),
 
     notas TEXT,
+    fecha_nota TIMESTAMP NULL DEFAULT NULL,
 
     CONSTRAINT fk_publicaciones_fuente
         FOREIGN KEY (fuente_id)
@@ -267,4 +268,26 @@ CREATE TABLE ph_conjuntos (
     activo BOOLEAN NOT NULL DEFAULT TRUE,
     fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uq_ph_conjuntos_normalizado (nombre_normalizado)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- Fusionado aca desde la migracion 008 (db/migrations/008_historial_notas.sql):
+-- historial de notas por publicacion. publicaciones.notas/fecha_nota quedan
+-- como cache liviano de la nota mas reciente para la columna "Nota" del
+-- listado; esta tabla es la fuente de verdad del historial completo.
+
+CREATE TABLE publicacion_notas (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    publicacion_id BIGINT NOT NULL,
+    contenido TEXT NOT NULL,
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_publicacion_notas_publicacion
+        FOREIGN KEY (publicacion_id)
+        REFERENCES publicaciones(id)
+        ON UPDATE CASCADE
+        ON DELETE CASCADE,
+
+    INDEX idx_publicacion_notas_publicacion (publicacion_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
