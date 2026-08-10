@@ -2323,8 +2323,9 @@ def extract_publication_data(page, link):
 
     # Deteccion de PH: se delega por completo al modulo compartido ph.py (la
     # misma logica que usan Amorel, Ciencuadras y FincaRaiz), sin nombre de
-    # complejo propio de Facebook: detect_ph ya sabe extraer "Conjunto X" /
-    # "Edificio X" del texto libre cuando no se le pasa complex_name.
+    # complejo propio de Facebook. Solo queda "ph" cuando el texto menciona un
+    # nombre del catalogo (data/pasto_ph.tsv); si el aviso solo dice
+    # "conjunto cerrado" sin nombrarlo, queda sin PH.
     ph = detect_ph(full_text)
 
     location_result = resolve_pasto_location(
