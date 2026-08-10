@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { db, pool } from "@/lib/db"
-import { barrios, fuentesInmobiliarias, phConjuntos, publicaciones, tiposInmueble } from "@/lib/db/schema"
+import { barrios, fuentesInmobiliarias, phConjuntos, publicacionNotas, publicaciones, tiposInmueble } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
 import type { ResultSetHeader, RowDataPacket } from "mysql2"
 import type { PoolConnection } from "mysql2/promise"
@@ -484,6 +484,7 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
       parqueadero: publicaciones.parqueadero,
       administracion: publicaciones.administracion,
       notas: publicaciones.notas,
+      fechaNota: publicaciones.fechaNota,
     })
     .from(publicaciones)
     .leftJoin(fuentesInmobiliarias, eq(publicaciones.fuenteId, fuentesInmobiliarias.id))
@@ -1114,9 +1115,12 @@ async function toValues(input: PublicacionInput) {
 // CREATE
 export async function createPublicacion(input: PublicacionInput) {
   try {
-    await db.insert(publicaciones).values(await toValues(input))
+    const inserted = await db.insert(publicaciones).values(await toValues(input)).$returningId()
     revalidatePath("/")
-    return { success: true as const }
+    // El id se devuelve para poder subir imagenes manuales justo despues de
+    // crear (ver publicacion-form.tsx): antes de esto no habia forma de saber
+    // en que carpeta de evidencias/ guardarlas.
+    return { success: true as const, id: inserted[0]?.id ?? null }
   } catch (error) {
     return { success: false as const, error: parseError(error) }
   }
@@ -1144,12 +1148,110 @@ export async function deletePublicacion(id: number) {
   }
 }
 
+// Nota unica que pisa la anterior. Usada solo por components/publicaciones-manager.tsx
+// (version anterior, sin ruta activa). El manager "pro" usa el historial de
+// publicacion_notas (ver getNotasPublicacion/addNotaPublicacion) para no
+// perder notas previas en cada guardado.
 export async function updateNotaPublicacion(id: number, nota: string | null) {
+  const trimmed = nota?.trim() || null
   try {
     await db
       .update(publicaciones)
-      .set({ notas: nota?.trim() ? nota.trim() : null })
+      // fecha_nota acompaña el contenido: se sella con la fecha del guardado
+      // y se limpia junto con la nota cuando se borra, para no dejar una
+      // fecha huerfana apuntando a una nota que ya no existe.
+      .set({ notas: trimmed, fechaNota: trimmed ? new Date() : null })
       .where(eq(publicaciones.id, id))
+    revalidatePath("/")
+    return { success: true as const }
+  } catch (error) {
+    return { success: false as const, error: parseError(error) }
+  }
+}
+
+export type NotaPublicacion = {
+  id: number
+  contenido: string
+  fechaCreacion: string
+}
+
+export async function getNotasPublicacion(publicacionId: number): Promise<NotaPublicacion[]> {
+  if (!Number.isInteger(publicacionId) || publicacionId <= 0) return []
+
+  const rows = await db
+    .select({
+      id: publicacionNotas.id,
+      contenido: publicacionNotas.contenido,
+      fechaCreacion: publicacionNotas.fechaCreacion,
+    })
+    .from(publicacionNotas)
+    .where(eq(publicacionNotas.publicacionId, publicacionId))
+    .orderBy(desc(publicacionNotas.fechaCreacion), desc(publicacionNotas.id))
+
+  return rows.map((row) => ({
+    id: row.id,
+    contenido: row.contenido,
+    fechaCreacion: row.fechaCreacion.toISOString(),
+  }))
+}
+
+// Agrega una tarjeta nueva al historial en vez de pisar la nota anterior
+// (ver migracion 008). publicaciones.notas/fecha_nota se actualizan como
+// cache de "ultima nota" para que la columna del listado no necesite una
+// subconsulta por fila.
+export async function addNotaPublicacion(publicacionId: number, contenido: string) {
+  const trimmed = contenido.trim()
+  if (!trimmed) {
+    return { success: false as const, error: "La nota no puede estar vacía." }
+  }
+
+  try {
+    const fechaCreacion = new Date()
+    await db.insert(publicacionNotas).values({ publicacionId, contenido: trimmed, fechaCreacion })
+    await db
+      .update(publicaciones)
+      .set({ notas: trimmed, fechaNota: fechaCreacion })
+      .where(eq(publicaciones.id, publicacionId))
+    revalidatePath("/")
+    return { success: true as const }
+  } catch (error) {
+    return { success: false as const, error: parseError(error) }
+  }
+}
+
+// Marca manual de link caido, independiente del chequeo automatico
+// (scripts/check_and_persist_link_status.py, que escribe en $.link_check).
+// Vive en una clave separada ($.link_check_manual) para no pisar ese
+// resultado automatico, y se escribe con JSON_SET/JSON_REMOVE en vez de
+// pasar por toValues()/updatePublicacion: ese flujo reemplaza toda la
+// columna links_adicionales (ver comentario en toValues), lo que borraria
+// ph_detectado, link_check y demas metadata del scraper en cada guardado.
+// El front le da prioridad sobre el chequeo en vivo y el persistido (ver
+// manualLinkCheck en publicaciones-manager-pro.tsx) porque existe justo
+// para los casos que el chequeo automatico no puede detectar: portales que
+// responden 200 pero ya no muestran la publicacion.
+export async function setManualLinkStatus(id: number, unavailable: boolean) {
+  try {
+    if (unavailable) {
+      const linkCheckManual = JSON.stringify({
+        ok: false,
+        detalle: "Marcado manualmente como no disponible",
+        marcado_en: new Date().toISOString(),
+      })
+      await pool.query<ResultSetHeader>(
+        `UPDATE publicaciones
+         SET links_adicionales = JSON_SET(COALESCE(links_adicionales, JSON_OBJECT()), '$.link_check_manual', CAST(? AS JSON))
+         WHERE id = ?`,
+        [linkCheckManual, id],
+      )
+    } else {
+      await pool.query<ResultSetHeader>(
+        `UPDATE publicaciones
+         SET links_adicionales = JSON_REMOVE(links_adicionales, '$.link_check_manual')
+         WHERE id = ? AND links_adicionales IS NOT NULL`,
+        [id],
+      )
+    }
     revalidatePath("/")
     return { success: true as const }
   } catch (error) {
