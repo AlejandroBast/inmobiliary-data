@@ -35,6 +35,14 @@ export const tiposInmueble = mysqlTable("tipos_inmueble", {
   fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
 })
 
+export const phConjuntos = mysqlTable("ph_conjuntos", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  nombre: varchar("nombre", { length: 150 }).notNull(),
+  nombreNormalizado: varchar("nombre_normalizado", { length: 150 }).notNull(),
+  activo: boolean("activo").notNull().default(true),
+  fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
+})
+
 export const publicaciones = mysqlTable("publicaciones", {
   id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
   // Opcional desde la migracion 005: en la carga manual no siempre hay un portal
@@ -74,3 +82,4 @@ export type Publicacion = typeof publicaciones.$inferSelect
 export type Fuente = typeof fuentesInmobiliarias.$inferSelect
 export type Barrio = typeof barrios.$inferSelect
 export type TipoInmueble = typeof tiposInmueble.$inferSelect
+export type PhConjunto = typeof phConjuntos.$inferSelect
