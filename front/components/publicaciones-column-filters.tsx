@@ -32,11 +32,13 @@ function valuesFromParams(params: URLSearchParams): ColumnFilters {
   return Object.fromEntries(filterKeys.map((key) => [key, params.get(key) ?? ""])) as ColumnFilters
 }
 
-export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, hasSinBarrio }: {
+export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, phNombres, hasSinBarrio, hasSinPh }: {
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
   tiposInmueble: Array<{ value: string; label: string }>
+  phNombres: Array<{ value: string; label: string }>
   hasSinBarrio: boolean
+  hasSinPh: boolean
 }) {
   const router = useRouter()
   const pathname = usePathname()
@@ -110,7 +112,7 @@ export function PublicacionesColumnFilters({ fuentes, barrios, tiposInmueble, ha
               <select value={values.duplicados} onChange={(e) => setField("duplicados", e.target.value)} className={selectClass}><option value="">Todas</option><option value="con">Repetidas</option><option value="sin">No repetidas</option></select>
             </>}
             {openGroup === "ubicacion" && <select value={values.barrio} onChange={(e) => setField("barrio", e.target.value)} className={selectClass}><option value="">Todos los barrios</option>{hasSinBarrio && <option value="__sin_barrio">Sin barrio</option>}{barrios.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>}
-            {openGroup === "ph" && <select value={values.phTipo} onChange={(e) => setField("phTipo", e.target.value)} className={selectClass}><option value="">Todo PH</option><option value="ph">Con PH</option><option value="normal">Sin PH</option></select>}
+            {openGroup === "ph" && <select value={values.phTipo} onChange={(e) => setField("phTipo", e.target.value)} className={selectClass}><option value="">Todo PH</option><option value="ph">Cualquier PH</option>{hasSinPh && <option value="__sin_ph">Sin PH</option>}{phNombres.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>}
             {openGroup === "fuente" && <select value={values.fuenteId} onChange={(e) => setField("fuenteId", e.target.value)} className={selectClass}><option value="">Todas las fuentes</option>{fuentes.map((item) => <option key={item.id} value={String(item.id)}>{item.nombre}</option>)}</select>}
             {openGroup === "precio" && <><Input type="number" placeholder="Precio minimo (millones)" value={values.precioMin} onChange={(e) => setField("precioMin", e.target.value)} className={inputClass} /><Input type="number" placeholder="Precio maximo (millones)" value={values.precioMax} onChange={(e) => setField("precioMax", e.target.value)} className={inputClass} /></>}
             {openGroup === "area" && <><Input type="number" placeholder="Area minima m2" value={values.m2Min} onChange={(e) => setField("m2Min", e.target.value)} className={inputClass} /><Input type="number" placeholder="Area maxima m2" value={values.m2Max} onChange={(e) => setField("m2Max", e.target.value)} className={inputClass} /></>}
