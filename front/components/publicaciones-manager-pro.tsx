@@ -24,13 +24,15 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  addNotaPublicacion,
   deletePublicacion,
   descartarCoincidenciaPublicaciones,
   getComparacionPublicaciones,
-  updateNotaPublicacion,
+  getNotasPublicacion,
   validatePublicacionLinks,
   type ComparacionPublicacion,
   type CoincidenciaPublicacion,
+  type NotaPublicacion,
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
 import { ExpandableText } from "@/components/expandable-text"
@@ -71,6 +73,7 @@ import { toast } from "sonner"
 type Row = Record<string, any> & { id: number; coincidencias?: CoincidenciaPublicacion[] }
 type ImageItem = { name: string; src: string }
 type HtmlItem = { name: string; src: string }
+type SortableColumn = "id" | "precio" | "m2" | "precioM2"
 type ComparisonDismissTarget = {
   coincidenciaId: number
   rootId: number
@@ -258,10 +261,35 @@ function persistedLinkCheck(publicacion: Row): PersistedLinkCheck | null {
   }
 }
 
+type ManualLinkCheck = { ok: boolean; detalle?: string; marcadoEn?: string }
+
+// Marca manual (setManualLinkStatus en actions/publicaciones.ts), guardada
+// aparte en links_adicionales.link_check_manual para no pisar el resultado
+// automatico de check_and_persist_link_status.py. Existe para los casos que
+// ese chequeo no puede detectar (portal que responde 200 pero ya no muestra
+// la publicacion), asi que gana sobre el chequeo en vivo y el persistido.
+function manualLinkCheck(publicacion: Row): ManualLinkCheck | null {
+  const raw = publicacion.linksAdicionales
+  const manual = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check_manual : null
+  if (!manual || typeof manual !== "object") return null
+  const value = manual as Record<string, unknown>
+  if (typeof value.ok !== "boolean") return null
+  return {
+    ok: value.ok,
+    detalle: typeof value.detalle === "string" ? value.detalle : undefined,
+    marcadoEn: typeof value.marcado_en === "string" ? value.marcado_en : undefined,
+  }
+}
+
 function duplicateLabel(coincidencias: CoincidenciaPublicacion[]) {
   const confirmed = coincidencias.filter((item) => item.estado === "confirmada").length
   if (confirmed) return `${confirmed} repetida${confirmed === 1 ? "" : "s"}`
   return `${coincidencias.length} posible${coincidencias.length === 1 ? "" : "s"}`
+}
+
+function SortIndicator({ active, direction }: { active: boolean; direction?: "asc" | "desc" }) {
+  if (!active) return <ArrowUpDown className="size-3.5 text-muted-foreground" />
+  return direction === "asc" ? <ArrowUp className="size-3.5" /> : <ArrowDown className="size-3.5" />
 }
 
 export function PublicacionesManagerPro({
@@ -295,6 +323,8 @@ export function PublicacionesManagerPro({
   const [htmlLoading, setHtmlLoading] = useState(false)
   const [notaDraft, setNotaDraft] = useState("")
   const [notaSaving, setNotaSaving] = useState(false)
+  const [notas, setNotas] = useState<NotaPublicacion[]>([])
+  const [notasLoading, setNotasLoading] = useState(false)
   const [toDelete, setToDelete] = useState<Row | null>(null)
   const [comparisonRootId, setComparisonRootId] = useState<number | null>(null)
   const [comparisonRows, setComparisonRows] = useState<ComparacionPublicacion[]>([])
@@ -305,26 +335,35 @@ export function PublicacionesManagerPro({
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-  const [precioSort, setPrecioSort] = useState<"asc" | "desc" | null>(null)
+  const [sort, setSort] = useState<{ column: SortableColumn; direction: "asc" | "desc" } | null>(null)
   const router = useRouter()
 
-  function togglePrecioSort() {
-    setPrecioSort((current) => current === "asc" ? "desc" : current === "desc" ? null : "asc")
+  // Mismo ciclo para las cuatro columnas ordenables (ID, Precio, Area, $/m2):
+  // null -> asc -> desc -> null. Ordenar por una columna reemplaza el orden
+  // anterior en vez de acumularse, como en cualquier tabla con un solo criterio.
+  function toggleSort(column: SortableColumn) {
     setCurrentPage(1)
+    setSort((current) => {
+      if (!current || current.column !== column) return { column, direction: "asc" }
+      if (current.direction === "asc") return { column, direction: "desc" }
+      return null
+    })
   }
 
   const sortedPublicaciones = useMemo(() => {
-    if (!precioSort) return publicaciones
+    if (!sort) return publicaciones
+    const { column, direction } = sort
 
     return [...publicaciones].sort((first, second) => {
-      const firstPrecio = first.precio === null || first.precio === undefined ? null : Number(first.precio)
-      const secondPrecio = second.precio === null || second.precio === undefined ? null : Number(second.precio)
-      if (firstPrecio === null && secondPrecio === null) return 0
-      if (firstPrecio === null) return 1
-      if (secondPrecio === null) return -1
-      return precioSort === "asc" ? firstPrecio - secondPrecio : secondPrecio - firstPrecio
+      const firstValue = first[column] === null || first[column] === undefined ? null : Number(first[column])
+      const secondValue = second[column] === null || second[column] === undefined ? null : Number(second[column])
+      if (firstValue === null && secondValue === null) return 0
+      // Los valores faltantes siempre quedan al final, sin importar la direccion.
+      if (firstValue === null) return 1
+      if (secondValue === null) return -1
+      return direction === "asc" ? firstValue - secondValue : secondValue - firstValue
     })
-  }, [publicaciones, precioSort])
+  }, [publicaciones, sort])
 
   const totalPages = Math.max(1, Math.ceil(sortedPublicaciones.length / pageSize))
   const safePage = Math.min(currentPage, totalPages)
@@ -373,14 +412,29 @@ export function PublicacionesManagerPro({
       setImagesLoading(false)
       setHtmlLoading(false)
       setNotaDraft("")
+      setNotas([])
+      setNotasLoading(false)
       return
     }
 
     const currentDetail = detail
     const controller = new AbortController()
-    setNotaDraft(currentDetail.notas ?? "")
+    setNotaDraft("")
     setImagesLoading(true)
     setHtmlLoading(true)
+    setNotasLoading(true)
+
+    getNotasPublicacion(currentDetail.id)
+      .then((result) => {
+        if (controller.signal.aborted) return
+        setNotas(result)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setNotas([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setNotasLoading(false)
+      })
 
     async function loadEvidence() {
       try {
@@ -503,13 +557,16 @@ export function PublicacionesManagerPro({
   }
 
   async function saveNota() {
-    if (!detail) return
+    if (!detail || !notaDraft.trim()) return
     setNotaSaving(true)
     try {
-      const res = await updateNotaPublicacion(detail.id, notaDraft)
+      const res = await addNotaPublicacion(detail.id, notaDraft)
       if (res.success) {
-        toast.success("Nota guardada.")
-        setDetail((current) => (current ? { ...current, notas: notaDraft.trim() || null } : current))
+        toast.success("Nota agregada.")
+        const trimmed = notaDraft.trim()
+        setNotas((current) => [{ id: -Date.now(), contenido: trimmed, fechaCreacion: new Date().toISOString() }, ...current])
+        setNotaDraft("")
+        setDetail((current) => (current ? { ...current, notas: trimmed, fechaNota: new Date().toISOString() } : current))
         router.refresh()
       } else {
         toast.error(res.error)
@@ -604,7 +661,17 @@ export function PublicacionesManagerPro({
           <Table className="table-fixed">
               <TableHeader>
                 <TableRow className="bg-muted/50 hover:bg-muted/50">
-                  <TableHead className="w-14">ID</TableHead>
+                  <TableHead className="w-14">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("id")}
+                      className="flex items-center gap-1 hover:text-primary"
+                      aria-label="Ordenar por ID"
+                    >
+                      ID
+                      <SortIndicator active={sort?.column === "id"} direction={sort?.direction} />
+                    </button>
+                  </TableHead>
                   <TableHead className="w-[160px]">Publicacion</TableHead>
                   <TableHead className="w-[110px]">Barrio</TableHead>
                   <TableHead className="w-[180px]">PH</TableHead>
@@ -612,22 +679,36 @@ export function PublicacionesManagerPro({
                   <TableHead className="w-[130px] text-right">
                     <button
                       type="button"
-                      onClick={togglePrecioSort}
+                      onClick={() => toggleSort("precio")}
                       className="ml-auto flex items-center gap-1 hover:text-primary"
                       aria-label="Ordenar por precio"
                     >
                       Precio
-                      {precioSort === "asc" ? (
-                        <ArrowUp className="size-3.5" />
-                      ) : precioSort === "desc" ? (
-                        <ArrowDown className="size-3.5" />
-                      ) : (
-                        <ArrowUpDown className="size-3.5 text-muted-foreground" />
-                      )}
+                      <SortIndicator active={sort?.column === "precio"} direction={sort?.direction} />
                     </button>
                   </TableHead>
-                  <TableHead className="w-[80px] text-right">Area</TableHead>
-                  <TableHead className="w-[90px] text-right">$/m2</TableHead>
+                  <TableHead className="w-[80px] text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("m2")}
+                      className="ml-auto flex items-center gap-1 hover:text-primary"
+                      aria-label="Ordenar por area"
+                    >
+                      Area
+                      <SortIndicator active={sort?.column === "m2"} direction={sort?.direction} />
+                    </button>
+                  </TableHead>
+                  <TableHead className="w-[90px] text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("precioM2")}
+                      className="ml-auto flex items-center gap-1 hover:text-primary"
+                      aria-label="Ordenar por precio por m2"
+                    >
+                      $/m2
+                      <SortIndicator active={sort?.column === "precioM2"} direction={sort?.direction} />
+                    </button>
+                  </TableHead>
                   <TableHead className="w-[110px]">Caracteristicas</TableHead>
                   <TableHead className="w-[100px]">Nota</TableHead>
                   <TableHead className="w-[100px]">Captura</TableHead>
@@ -641,10 +722,11 @@ export function PublicacionesManagerPro({
                     key={p.id}
                     className={[
                       "cursor-pointer transition-colors hover:bg-primary/5",
-                      // El chequeo en vivo (linkStatuses) manda cuando ya corrio para esta
-                      // fila; si todavia no, se usa el resultado persistido por
+                      // La marca manual gana siempre; si no hay, el chequeo en vivo
+                      // (linkStatuses) manda cuando ya corrio para esta fila, y si
+                      // todavia no, se usa el resultado persistido por
                       // check_and_persist_link_status.py para no depender de esperar.
-                      (linkStatuses[p.id]?.ok ?? persistedLinkCheck(p)?.ok) === false
+                      (manualLinkCheck(p)?.ok ?? linkStatuses[p.id]?.ok ?? persistedLinkCheck(p)?.ok) === false
                         ? "border-rose-300/70 bg-rose-50/80 hover:bg-rose-100/70 dark:border-rose-400/30 dark:bg-rose-950/30 dark:hover:bg-rose-950/45"
                         : p.coincidencias?.length
                           ? "border-amber-300/70 bg-amber-50/70 hover:bg-amber-100/60 dark:border-amber-400/25 dark:bg-amber-400/10 dark:hover:bg-amber-400/15"
@@ -908,21 +990,38 @@ export function PublicacionesManagerPro({
               </div>
 
               <div className="surface-muted space-y-3 p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div>
-                    <p className="text-sm font-medium">Nota personalizada</p>
-                    <p className="text-xs text-muted-foreground">Observaciones internas asociadas solo a esta publicacion.</p>
+                <div>
+                  <p className="text-sm font-medium">Notas personalizadas</p>
+                  <p className="text-xs text-muted-foreground">Observaciones internas asociadas solo a esta publicacion. Cada una queda guardada por separado, con su fecha.</p>
+                </div>
+
+                {notasLoading ? (
+                  <p className="text-sm text-muted-foreground">Cargando notas...</p>
+                ) : notas.length > 0 ? (
+                  <div className="space-y-2">
+                    {notas.map((nota) => (
+                      <div key={nota.id} className="rounded-lg border bg-background p-3 text-sm">
+                        <p className="whitespace-pre-wrap">{nota.contenido}</p>
+                        <p className="mt-1.5 text-xs text-muted-foreground">{formatDate(nota.fechaCreacion)}</p>
+                      </div>
+                    ))}
                   </div>
-                  <Button type="button" onClick={saveNota} disabled={notaSaving} className="shrink-0">
-                    {notaSaving ? "Guardando..." : "Guardar nota"}
+                ) : (
+                  <p className="text-sm text-muted-foreground">Todavia no hay notas para esta publicacion.</p>
+                )}
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <Textarea
+                    value={notaDraft}
+                    onChange={(event) => setNotaDraft(event.target.value)}
+                    placeholder="Escribe una nota nueva..."
+                    rows={3}
+                    className="flex-1"
+                  />
+                  <Button type="button" onClick={saveNota} disabled={notaSaving || !notaDraft.trim()} className="shrink-0">
+                    {notaSaving ? "Guardando..." : "Agregar nota"}
                   </Button>
                 </div>
-                <Textarea
-                  value={notaDraft}
-                  onChange={(event) => setNotaDraft(event.target.value)}
-                  placeholder="Escribe una nota interna..."
-                  rows={4}
-                />
               </div>
 
               <div className="space-y-3">
@@ -1011,15 +1110,18 @@ export function PublicacionesManagerPro({
                     </span>
                   )}
                   {(() => {
+                    const manual = manualLinkCheck(detail)
                     const persisted = persistedLinkCheck(detail)
                     const liveStatus = linkStatuses[detail.id]
-                    // El chequeo en vivo manda apenas resuelve; mientras tanto se
-                    // muestra el resultado persistido (si existe) en vez de un
-                    // simple "validando" sin informacion.
-                    const ok = liveStatus ? liveStatus.ok : (persisted?.ok ?? null)
-                    const isLive = Boolean(liveStatus)
+                    // La marca manual gana siempre (existe justo para los casos que
+                    // el chequeo automatico no detecta); si no hay, el chequeo en
+                    // vivo manda apenas resuelve, y mientras tanto se muestra el
+                    // resultado persistido (si existe) en vez de un simple
+                    // "validando" sin informacion.
+                    const ok = manual ? manual.ok : liveStatus ? liveStatus.ok : (persisted?.ok ?? null)
+                    const isLive = Boolean(liveStatus) && !manual
 
-                    if (linksLoading && !liveStatus && !persisted) {
+                    if (linksLoading && !liveStatus && !persisted && !manual) {
                       return (
                         <Badge variant="outline" className="tone-slate gap-1">
                           <Loader2 className="size-3 animate-spin" />
@@ -1041,7 +1143,7 @@ export function PublicacionesManagerPro({
                       return (
                         <Badge variant="outline" className="tone-rose gap-1">
                           <AlertTriangle className="size-3" />
-                          Link caido{!isLive && persisted?.verificado_en ? ` (verificado ${formatDate(persisted.verificado_en)})` : ""}
+                          Link caido{manual ? " (marcado manualmente)" : !isLive && persisted?.verificado_en ? ` (verificado ${formatDate(persisted.verificado_en)})` : ""}
                         </Badge>
                       )
                     }
