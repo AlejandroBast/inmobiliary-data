@@ -1,0 +1,433 @@
+# Catalogo de PH (conjuntos, edificios, condominios) de Pasto.
+# Un nombre por linea, tal como debe quedar guardado (con tildes/mayusculas).
+# Lineas vacias y las que empiezan con # se ignoran.
+#
+# Cargado desde el listado provisto por el cliente. Se quitaron los prefijos
+# de barrio/sector ("Palermo.", "Castilla.", etc.) y el marcador "PH" porque
+# un aviso nombra el edificio, no el sector + "PH" (ver inmobiliary.detectors.ph).
+# Tambien se descartaron las entradas sin nombre real ("Sin nombre N",
+# "Pendiente de nombre", "Vivienda Multifamiliar N" a secas): son marcadores
+# internos del cliente para PH sin bautizar, se repiten identicos en varios
+# barrios y nunca van a aparecer asi en el texto de un aviso.
+Jardín del Río
+Edificio Turin
+Condominio Valle de Atriz
+Refugio Valle de Atriz
+Portal Valle de Atriz
+Rincón Valle de Atríz
+Edificio Premium de la Avenida
+Edificio Hito
+Edificio Lotus
+Edificio La Arboleda
+Torres de la Avenida
+Campos de Aragon
+Atres tower
+Jardín de Lily
+Edificio D"azini
+Edificio Gran Avenida
+Edificio Titanio
+Edificio Palmeto
+Solsticio II
+Edificio Solsticio I
+Edificio Terrazas de Morasurco
+Edificio Yambinoy
+Reserva de Verojú
+Jardín del Morasurco
+Edificio Montecarlo
+Edificio Portal de Cantabria
+Portal Morasurco
+Torre Morasurco
+Edificio Atrium
+Edificio Figueres
+Edificio Vivarium
+Edificio Dos Angeles
+Edificio Ventura
+Edificio Roma
+Edificio Palermo
+Edificio Los Arces
+Edificio Las Aradas
+Torres del Parque
+Reserva de Parana
+Edificio Ceretto
+Rincon de Atocha
+Campos de Castilla
+Edificio Raices
+Edificio Torre San Gabriel
+Edificio Aconcagua
+Edificio Austral torre VI
+Loyola 32
+Edificio Austral V
+Edificio Soho 29
+Edificio Novacentro
+Edificio Torre Parque Central 2
+Edificio Torre Parque Central
+Torres de Alejandría
+Jardín de Atriz
+Edificio Shalom
+Edificio SPA Universal
+Edificio Santarem
+Edificio Habitar de la Colina
+Edificio Conjunto Residencial Camino Real
+Edificio Torre D" Ammerissa
+Edificio Rosal del Monte
+Edificio Palermo 38
+Edificio Torre Menorca
+Edificio Los Arcangeles
+Edificio Ferrara
+Edificio Toscana
+Edificio Nova 37
+Edificio Alborada
+Edificio Salamanca
+Edificio Portal de Versalles
+Edificio Vitrium
+Edificio Suyusama
+Edificio Torre Madero
+Edificio Parque M
+Edificio Bareló
+Edificio Maru
+Edificio Cabrachi
+Edificio Blume
+Edificio Angelita
+Edificio Rafael
+Edificio Figueres
+Edificio Belina 39
+Portal 39
+Gran Murano
+Edficio Mauira
+Edificio Amira
+Nuevo
+Edificio Altobello
+Murano 39
+Edificio Área 40
+Habitar 2000
+Habitar con Estilo
+Edificio Ecoloft
+Edificio Terraza Jardín
+Edificio Arupo
+Condominio Habitar Versalles
+Edificio San Angel
+Ruraq Maki
+Los Almendros
+Versalles
+Habitar del Parque Versalles
+Urkunina
+Parque Versalles
+Punto 34
+Reserva del Parque
+Edificio Murano
+Versalles Reservado
+La Riviera Reservado
+Edificio torre 21
+Edificio Vitra 30
+Edificio Santa María de la Riviera
+Edificio Aticance
+Edificio María Isabel
+Edificio Arawak
+Edificio Gales
+Edificio Pazuar
+Edificio Mayagüez
+Edificio Vetro
+Edificio Vetro 2
+Edificio Arcadia 1
+Edificio D"Arka
+Sauces 45
+Salerno Conjunto Residencial
+Edificio Torre Arce
+Edificio Salamanca
+Edificio Krystal
+Edificio Santa Teresita
+Edificio Altos Parana
+Edificio Primavera
+Edificio Santa Rosa
+Edificio Porton Parana
+Los Nogales
+Cedritos
+Edificio La Giralda
+Torre Herald
+Edificio Torrontegui
+Edificio Portal de San Ignacio
+Edificio Aranjuez
+Edificio Aurora
+Edificio Gamma
+Edificio Santa Helena
+Edificio Los Alizales
+Edificio Lubiana
+Edificio Bellaurora
+Edificio Valparaiso
+Edificio Portal de la Aurora
+Edificio Aurora Reservado
+Edificio Amalie
+Edificio La Foret
+Edificio San Blass
+Edificio Unicentro
+Edificio Balcones de la Aurora
+Edificio Parque La Aurora
+Edificio Austral I y II
+Edificio Austral torre III
+Edificio Austral torre IV
+Edificio Solari
+Edificio Habitar La Aurora
+Edificio Tribeca
+Edificio Bellanova
+Edificio Makalú
+Edificio Ambar
+Edificio Almeria
+Edificio Unidad Residencial Montreal
+Edificio Espacio La 10
+Edificio Trento
+Portal las Acacias.
+Edificio Ibiza
+Edificio Balcones de Sañudo
+Edificio Bilbao
+Edificio Amaranto
+Edificio Tescual
+Edificio San Juanito
+Edificio Las Plazuelas
+Edificio Cuadras Veintiuno
+Edificio Terranova
+Edificio San Jeronimo
+Edificio Casa Paz
+Edificio Estella
+Edificio Juana Maria
+Edificio Betel
+Edificio Madeira
+Edificio La Victoria
+Edificio Torre del Parque
+Edificio Calatrava
+Edificio Merari
+Edificio Punto Centro
+Edificio Torre Tundama
+Edificio Sindamanoy
+Conjunto Vivienda Multifamiliar 1
+Edificio Balcon de Aturez
+Santa Lucia de Atriz
+Bambú
+Portal de Aturez
+Edificio Torre San Jorge
+Unidad Residencial Las Banderas
+Edificio Alicante
+Torre San Francisco
+Habitar Pandiaco
+Edificio Area 42
+Edificio Maria Laura
+Edificio Belmonte
+Edificio P.S.1
+Edificio Lina Maria
+Edificio Piamonte
+Edificio Palo Verde
+Edificio Vista Real
+Edificio Terracota
+Edificio La Cumbre
+Edificio Bonavista
+Edificio Rodamonte
+Edificio Fioval
+Edificio El Peñon
+Edificio Altozano
+Edificio Tescual 1
+Edificio Torre Barcelona
+Edificio Torre Madrid
+Alameda Real
+Torre Olimpo II
+Edificio Portal de la Colina
+Edificio Habitel
+Edificio C 17 43 42
+Edificio María Alejandra
+Edificio Alkatraz
+Edificio Primavera
+Edificio Nogales de Versalles
+Edificio Portal de Elvetia
+Edificio La Torre
+Edificio Marinera
+Edificio Orion
+Edificio Victoria
+Edificio Melvillo
+Edificio Murano II
+Edificio La Coruña
+Edificio Candilejas
+Edificio Mirasol
+Edificio San Fernando
+Edificio Andalucía
+Edificio Tadeo
+Edificio Bacc
+Avenida Real
+Bosques de San Remo
+Balcones de la Riviera
+Edificio Riviera
+Edificio Josse
+Edificio Las Velas
+Edificio Mileto
+Edificio Floria
+Edfificio Santa Mónica
+Edificio Pinasaco
+Edificio Los Cristales
+Edificio El Cóndor
+Edificio Cataluña
+Edificio Cordoba
+El Bosque
+Quinta Serrana
+Riviera del Norte
+Edificio Piedemonte
+Edificio Santiago
+Edificio D"Acuti
+Edificio del Norte
+Edificio Tusandala
+Edificio Guernica
+Edificio Riviera del Norte
+Edificio Radazzo
+Edificio Malia
+Edificio Valenty
+Edificio Torre 32
+Edificio Alejandra
+Carrera 32 #16-20
+Edificio Boulevard 33
+Edificio Santa María
+Edificio Castorano
+Edificio Santorino
+Edificio Torre Maridiaz
+Edificio Santa Coloma
+Edificio Jhondani
+Edificio Rincón de Paraná
+Edificio Agora
+Edificio Jhanet
+Edificio Corinto
+Edificio Solari
+Edificio Maridiaz 34
+Edificio Miguel Angel
+Edificio San Gabriel
+Edificio Aikaryn
+Edificio Los Alamos
+Edificio Zhara
+Edificio Cra 35 #17-103
+Edificio Amber
+Edificio Portal de Oviedo
+Edificio Los Carrizales
+Edificio Cascabel
+Edificio Cayambe
+Edificio Provenza
+Portal de Santa Clara
+Edificio San José
+Edificio Riello
+Edificio Jhoanna
+Edificio Nazareth
+Edificio Luxor
+Edificio Isabella II
+Edificio San Diego
+Torres Alfa II
+Torre San Sebastian
+Edificio Isabella
+Edificio Torre Alfa
+Edificio Montebello
+Edificio Monterrey
+Edificio Asturias
+Edificio Omega
+Edificio San Gabriel
+Edificio San Andres
+Edificio Torroja
+Edificio Palmar
+Edificio Torre Olimpo
+Edificio Aynkarim II
+Edificio Catalina
+Edificio Parana
+Edificio Los Andes
+Edificio Jacob
+Edificio Alameda
+Edificio Santacruz
+Edificio San Andres
+Edificio Primaveral
+Edificio Las Camelias
+Edificio Renacer
+Edificio Villas de San Ignacio.
+Edificio Torre de Alcala
+Edificio Torre Ingaac
+Edificio Emanuel
+Edificio Sotilezza
+Edificio Arteaga
+Edificio Sara Mari
+Edificio Porte D Orleans
+Edificio San Ignacio Real
+Edificio Manresa
+Unidad Residencial San Ignacio
+Edificio D Barletta
+Edificio Nuevo Bombona
+Edificio Sauces
+Condominio San Ignacio
+Edificio Sonely
+Edificio Leblon
+Edificio Jeroka
+Edificio Lucero
+Edificio Hidalpa
+Edificio Los Hexagonos
+Edificio Torre San Francisco
+Edificio Atalaya
+Edificio Boreal
+Edificio Mar Azul
+Edificio Renacer
+Edificio Arrayanes
+Edificio Rosa Palma
+Edificio El Cortijo
+Edificio Acacias Reservado
+Edificio Los Angeles
+Edificio Nataly
+Edificio Portal de Rosas
+Edificio 31B-28
+Edificio Cra. 30 21 42
+Edificio Orquidea Real
+Edificio Lina Sofía
+Edificio Office Center
+Edificio Torre del Río
+Edificio del Obelisco
+Edificio La Calleja
+Edificio Portal de Las Cuadras
+Edificio Matisse
+Edificio Tosoabi
+Edificio Madrigal
+Edificio Kamsa
+Edificio Mosquera
+Edificio Vipasam
+Rincón de Aturez
+Edificio Mateo Nicolas
+Edificio San Antonio
+Edificio El Dorado
+Edificio Cap Cana
+Edificio Panorama
+Edificio Altos de la Colina
+Edificio Arona
+Vivienda multifamiliar 37-08
+Edificio Vida
+KR33a - 20-105
+Calle 16 #33-08
+Edificio Tertulia
+Edificio Calle 16A #32A-03
+Cll 16 35 27 Los Álamos
+Calle 15 35 34
+Edificio Multifamiliar 1
+Edificio Vivienda Multifamiliar 19A 41
+Vivienda multifamiliar 18-131
+Edificio Albamarino
+Alameda del Río
+Balcones del Este
+Oasis del Este
+Villalucciana
+Balcones de la Pradera
+Bosques de la Colina Etapa 1
+Bosques de la Colina Etapa 2
+Bosques de la Colina Etapa 3
+Prado Verde
+Pascana
+Torres de Girasol
+Torres de Mariluz Etapa 1
+Torres de Mariluz Etapa 2
+Torres de Mariluz Etapa 3
+Torres de la Castellana
+Balcones de Pubenza
+Llano grande
+Los Hexágonos
+Novacentro
+Torre maya
+Sindamanoy
+Panoramico I
+Panoramico II
+Gualcaloma
+La Pampa de San Sebastian
+Villaflor II
+Sotavento
