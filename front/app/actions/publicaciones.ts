@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { db, pool } from "@/lib/db"
-import { barrios, fuentesInmobiliarias, publicaciones, tiposInmueble } from "@/lib/db/schema"
+import { barrios, fuentesInmobiliarias, phConjuntos, publicaciones, tiposInmueble } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
 import type { ResultSetHeader, RowDataPacket } from "mysql2"
 import type { PoolConnection } from "mysql2/promise"
@@ -411,10 +411,14 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
   }
 
   const phTipo = cleanFilter(filters.phTipo)
-  if (phTipo === "ph") {
-    conditions.push(sql`${publicaciones.ph} IS NOT NULL AND TRIM(${publicaciones.ph}) <> ''`)
-  } else if (phTipo === "normal") {
+  if (phTipo === "__sin_ph") {
     conditions.push(sql`(${publicaciones.ph} IS NULL OR TRIM(${publicaciones.ph}) = '')`)
+  } else if (phTipo === "ph") {
+    conditions.push(sql`${publicaciones.ph} IS NOT NULL AND TRIM(${publicaciones.ph}) <> ''`)
+  } else if (phTipo) {
+    // Nombre puntual del catalogo de PH (ph_conjuntos): coincidencia exacta,
+    // porque publicaciones.ph guarda el nombre canonico devuelto por detect_ph.
+    conditions.push(eq(publicaciones.ph, phTipo))
   }
 
   const barrio = cleanFilter(filters.barrio) ?? cleanFilter(filters.ubicacion)
@@ -1011,6 +1015,26 @@ export async function getTiposInmueble() {
     .orderBy(tiposInmueble.nombre)
 
   return rows.map((r) => ({ value: r.nombre, label: r.nombre }))
+}
+
+export async function getPhNombres() {
+  const rows = await db
+    .select({ nombre: phConjuntos.nombre })
+    .from(phConjuntos)
+    .where(eq(phConjuntos.activo, true))
+    .orderBy(phConjuntos.nombre)
+
+  const [sinPh] = await db
+    .select({
+      total: sql<number>`COUNT(*)`,
+    })
+    .from(publicaciones)
+    .where(sql`${publicaciones.ph} IS NULL OR TRIM(${publicaciones.ph}) = ''`)
+
+  return {
+    ph: rows.map((r) => ({ value: r.nombre, label: r.nombre })),
+    hasSinPh: Number(sinPh?.total ?? 0) > 0,
+  }
 }
 
 export async function createFuente(input: { nombre: string; tipoFuente?: string | null; urlBase?: string | null }) {
