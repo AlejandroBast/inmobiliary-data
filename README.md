@@ -112,6 +112,7 @@ py -3 scripts/seed_catalogos.py --apply
 | `coincidencias_publicaciones` | migración 001 | Pares candidatos a duplicado y su puntaje |
 | `barrios` | esquema base (antes migración 003) | Catálogo de barrios y veredas de Pasto |
 | `tipos_inmueble` | esquema base (antes migración 003) | Catálogo de tipos |
+| `ph_conjuntos` | esquema base (antes migración 006) | Catálogo de PH (conjuntos/edificios/condominios) de Pasto |
 
 ### Migraciones
 
@@ -122,6 +123,29 @@ py -3 scripts/seed_catalogos.py --apply
 | `003_catalogos_ubicacion_tipo.sql` | Crea `barrios` y `tipos_inmueble` (ya fusionado en el esquema base; este archivo queda solo para bases muy viejas) |
 | `004_carga_manual_campos_opcionales.sql` | `link_origen` y `precio` pasan a opcionales, para carga manual libre (ya fusionado en el esquema base) |
 | `005_fuente_opcional.sql` | `fuente_id` pasa a opcional (ya fusionado en el esquema base) |
+| `006_catalogo_ph.sql` | Crea `ph_conjuntos` (ya fusionado en el esquema base) |
+
+### Catálogo de PH
+
+`data/pasto_ph.tsv` es un listado curado a mano (un nombre de PH por línea)
+con los conjuntos/edificios/condominios de Pasto. `inmobiliary.detectors.ph`
+lo usa para reconocer un PH mencionado en título/descripción **aunque el
+aviso nunca diga "PH" ni "conjunto"** (p. ej. "Apartamento en Torres de
+Aquine, Pasto"), que es el caso más común: la mayoría de anuncios no declara
+el tipo de propiedad explícitamente.
+
+```powershell
+# 1. Poblar ph_conjuntos con los nombres de data/pasto_ph.tsv
+py -3 scripts/seed_catalogos.py --apply
+
+# 2. Relacionar publicaciones ya guardadas con esos nombres (dry-run primero)
+py -3 scripts/backfill_ph_catalog.py
+py -3 scripts/backfill_ph_catalog.py --apply
+```
+
+Las publicaciones nuevas quedan cubiertas solas: los cinco scrapers llaman a
+`detect_ph()` en cada corrida, así que un nombre agregado al catálogo hoy
+también se reconoce en los avisos capturados de ahí en adelante.
 
 #### Carga manual libre
 
@@ -205,9 +229,10 @@ cron) y usa `SCRAPER_PYTHON` si está definida, igual que el front.
 |---|---|
 | `py -3 scripts/apply_duplicate_migration.py` | Aplica migraciones 001 y 002 |
 | `py -3 scripts/apply_catalogos_migration.py` | Aplica migración 003 |
-| `py -3 scripts/seed_catalogos.py` | Puebla `barrios` y `tipos_inmueble` |
+| `py -3 scripts/seed_catalogos.py` | Puebla `barrios`, `tipos_inmueble` y `ph_conjuntos` |
 | `py -3 scripts/backfill_duplicate_detection.py` | Reanaliza duplicados en publicaciones ya guardadas |
 | `py -3 scripts/backfill_location_normalization.py` | Renormaliza los barrios ya guardados |
+| `py -3 scripts/backfill_ph_catalog.py` | Relaciona publicaciones ya guardadas con un nombre de PH del catálogo (ver abajo) |
 | `py -3 scripts/import_excel_ventas.py <archivo.xlsx>` | Importa la hoja **Ventas** del Excel del cliente (ver abajo) |
 
 ### Importar el Excel del cliente
