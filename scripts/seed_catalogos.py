@@ -1,9 +1,14 @@
-"""Siembra los catalogos de barrios y tipos de inmueble sin afectar publicaciones.
+"""Siembra los catalogos de barrios, tipos de inmueble y PH sin afectar publicaciones.
 
 Por defecto corre en modo dry-run (solo genera un reporte JSON en
 logs/catalogos_seed/). Con --apply inserta las filas nuevas en los catalogos
 y corrige el casing de publicaciones.barrio/tipo_inmueble para que coincida
 con el texto canonico del catalogo (mismo valor normalizado, distinto casing).
+
+El catalogo de PH no se siembra con valores libres de publicaciones.ph (ver
+build_ph_seed): sale solo de data/pasto_ph.tsv. Para relacionar publicaciones
+ya guardadas con un nombre de PH del catalogo corre aparte
+scripts/backfill_ph_catalog.py.
 """
 
 import argparse
@@ -17,6 +22,7 @@ import mysql.connector
 from dotenv import load_dotenv
 
 from inmobiliary.detectors.location import load_catalog, normalize_text
+from inmobiliary.detectors.ph import load_ph_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +30,7 @@ load_dotenv(ROOT / "front" / ".env.local")
 load_dotenv(ROOT / ".env", override=False)
 
 BARRIO_PREFIX_RE = re.compile(r"^(barrio|vereda|corregimiento|b|br|bo)\s+")
-BASE_TIPOS = ["Apartamento", "Casa", "Local", "Oficina", "Lote", "Bodega", "Consultorio", "Finca"]
+BASE_TIPOS = ["Apartamento", "Apartaestudio", "Casa", "Local", "Oficina", "Lote", "Bodega", "Consultorio", "Finca"]
 
 
 def normalize_barrio_key(value):
@@ -85,8 +91,16 @@ def build_tipo_seed(existing_tipo_values):
     return catalog
 
 
+def build_ph_seed():
+    """A diferencia de barrios/tipos, el catalogo de PH sale solo de
+    data/pasto_ph.tsv: es un listado curado a mano por el cliente, y mezclar
+    valores libres de publicaciones.ph (que incluyen el marcador generico
+    "Si") lo llenaria de ruido."""
+    return dict(load_ph_catalog())
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Siembra catalogos de barrios y tipos de inmueble.")
+    parser = argparse.ArgumentParser(description="Siembra catalogos de barrios, tipos de inmueble y PH.")
     parser.add_argument("--apply", action="store_true", help="Escribe los cambios (por defecto es dry-run).")
     args = parser.parse_args()
 
@@ -105,14 +119,18 @@ def main():
 
     barrio_seed = build_barrio_seed(existing_barrios)
     tipo_seed = build_tipo_seed(existing_tipos)
+    ph_seed = build_ph_seed()
 
     cursor.execute("SELECT nombre, nombre_normalizado FROM barrios")
     existing_barrio_rows = {row["nombre_normalizado"]: row["nombre"] for row in cursor.fetchall()}
     cursor.execute("SELECT nombre, nombre_normalizado FROM tipos_inmueble")
     existing_tipo_rows = {row["nombre_normalizado"]: row["nombre"] for row in cursor.fetchall()}
+    cursor.execute("SELECT nombre, nombre_normalizado FROM ph_conjuntos")
+    existing_ph_rows = {row["nombre_normalizado"]: row["nombre"] for row in cursor.fetchall()}
 
     new_barrios = {k: v for k, v in barrio_seed.items() if k not in existing_barrio_rows}
     new_tipos = {k: v for k, v in tipo_seed.items() if k not in existing_tipo_rows}
+    new_ph = {k: v for k, v in ph_seed.items() if k not in existing_ph_rows}
 
     barrio_canonical_by_key = {**existing_barrio_rows, **new_barrios}
     tipo_canonical_by_key = {**existing_tipo_rows, **new_tipos}
@@ -141,11 +159,13 @@ def main():
         "counts": {
             "new_barrios": len(new_barrios),
             "new_tipos": len(new_tipos),
+            "new_ph": len(new_ph),
             "barrio_case_fixes": len(barrio_case_fixes),
             "tipo_case_fixes": len(tipo_case_fixes),
         },
         "new_barrios": sorted(new_barrios.values(), key=str.lower),
         "new_tipos": sorted(new_tipos.values(), key=str.lower),
+        "new_ph": sorted(new_ph.values(), key=str.lower),
         "barrio_case_fixes": barrio_case_fixes,
         "tipo_case_fixes": tipo_case_fixes,
     }
@@ -169,6 +189,11 @@ def main():
                 cursor.executemany(
                     "INSERT INTO tipos_inmueble (nombre, nombre_normalizado) VALUES (%s, %s)",
                     [(v, k) for k, v in new_tipos.items()],
+                )
+            if new_ph:
+                cursor.executemany(
+                    "INSERT INTO ph_conjuntos (nombre, nombre_normalizado) VALUES (%s, %s)",
+                    [(v, k) for k, v in new_ph.items()],
                 )
             if barrio_case_fixes:
                 cursor.executemany(
