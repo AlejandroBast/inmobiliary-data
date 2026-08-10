@@ -14,6 +14,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxInputGroup,
+  ComboboxItem,
+  ComboboxTriggerIcon,
+} from "@/components/ui/combobox"
 import { formatCOP } from "@/lib/format"
 import type { Fuente } from "@/lib/db/schema"
 import { AlertTriangle, CalendarDays, Eraser, Filter, Home, MapPinned, Ruler, Search, Tags, type LucideIcon } from "lucide-react"
@@ -103,13 +111,17 @@ export function PublicacionesFiltrosPro({
   fuentes,
   barrios,
   tiposInmueble,
+  phNombres,
   hasSinBarrio,
+  hasSinPh,
   initialValues,
 }: {
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
   tiposInmueble: Array<{ value: string; label: string }>
+  phNombres: Array<{ value: string; label: string }>
   hasSinBarrio: boolean
+  hasSinPh: boolean
   initialValues: Partial<FiltrosValue>
 }) {
   const router = useRouter()
@@ -128,6 +140,15 @@ export function PublicacionesFiltrosPro({
   }, [initialValues])
 
   const totalActive = useMemo(() => activeCount(values), [values])
+  const phItems = useMemo(
+    () => [
+      { value: "all", label: "Todas" },
+      { value: "ph", label: "Cualquier PH" },
+      ...(hasSinPh ? [{ value: "__sin_ph", label: "Sin PH" }] : []),
+      ...phNombres,
+    ],
+    [phNombres, hasSinPh],
+  )
   const minCOP = moneyValue(values.precioMin)
   const maxCOP = moneyValue(values.precioMax)
   const sliderMin = priceInputToMillions(values.precioMin, priceSlider.min)
@@ -260,17 +281,24 @@ export function PublicacionesFiltrosPro({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Propiedad" htmlFor="filtro-ph-tipo">
-            <Select value={values.phTipo} onValueChange={(value) => setField("phTipo", value ?? "")}>
-              <SelectTrigger id="filtro-ph-tipo">
-                <SelectValue placeholder="Todas" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todas</SelectItem>
-                <SelectItem value="ph">Con PH</SelectItem>
-                <SelectItem value="normal">Normales</SelectItem>
-              </SelectContent>
-            </Select>
+          <Field label="PH" htmlFor="filtro-ph-tipo">
+            <Combobox
+              items={phItems}
+              value={values.phTipo || "all"}
+              onValueChange={(value) => setField("phTipo", value === "all" ? "" : (value ?? ""))}
+            >
+              <ComboboxInputGroup>
+                <ComboboxInput id="filtro-ph-tipo" placeholder="Buscar PH por nombre..." />
+                <ComboboxTriggerIcon />
+              </ComboboxInputGroup>
+              <ComboboxContent emptyMessage="Sin coincidencias.">
+                {(item: { value: string; label: string }) => (
+                  <ComboboxItem key={item.value} value={item.value}>
+                    {item.label}
+                  </ComboboxItem>
+                )}
+              </ComboboxContent>
+            </Combobox>
           </Field>
           <Field label="Publicaciones repetidas" htmlFor="filtro-duplicados">
             <Select value={values.duplicados} onValueChange={(value) => setField("duplicados", value ?? "")}>
