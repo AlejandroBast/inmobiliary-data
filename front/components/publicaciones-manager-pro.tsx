@@ -269,14 +269,18 @@ export function PublicacionesManagerPro({
   fuentes,
   barrios,
   tiposInmueble,
+  phNombres,
   hasSinBarrio,
+  hasSinPh,
   hasActiveFilters,
 }: {
   publicaciones: Row[]
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
   tiposInmueble: Array<{ value: string; label: string }>
+  phNombres: Array<{ value: string; label: string }>
   hasSinBarrio: boolean
+  hasSinPh: boolean
   hasActiveFilters: boolean
 }) {
   const [formOpen, setFormOpen] = useState(false)
@@ -629,7 +633,7 @@ export function PublicacionesManagerPro({
                   <TableHead className="w-[100px]">Captura</TableHead>
                   <TableHead className="w-[180px] text-right">Acciones</TableHead>
                 </TableRow>
-                <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} tiposInmueble={tiposInmueble} hasSinBarrio={hasSinBarrio} />
+                <PublicacionesColumnFilters fuentes={fuentes} barrios={barrios} tiposInmueble={tiposInmueble} phNombres={phNombres} hasSinBarrio={hasSinBarrio} hasSinPh={hasSinPh} />
               </TableHeader>
               <TableBody>
                 {visiblePublicaciones.map((p, index) => (
