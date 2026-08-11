@@ -291,3 +291,37 @@ CREATE TABLE publicacion_notas (
 
     INDEX idx_publicacion_notas_publicacion (publicacion_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- Fusionado aca desde la migracion 009
+-- (db/migrations/009_comentarios_comparacion.sql): comentarios escritos en la
+-- comparacion de duplicados y motivo de cada eliminacion.
+--
+-- Ojo con la diferencia contra publicacion_notas de arriba: esta tabla NO
+-- tiene clave foranea a publicaciones. Es deliberado. Su razon de ser es
+-- justificar por que se elimino un inmueble, asi que tiene que sobrevivir al
+-- borrado de ese inmueble; con una FK en cascada el motivo desapareceria junto
+-- con la fila que explica. Las columnas snapshot_* guardan con que datos se
+-- veia la publicacion al comentarla, para que la bitacora se lea sola despues.
+
+CREATE TABLE comentarios_comparacion (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    publicacion_id BIGINT NOT NULL,
+    publicacion_raiz_id BIGINT NULL,
+
+    tipo ENUM('comentario', 'eliminacion') NOT NULL DEFAULT 'comentario',
+    contenido TEXT NOT NULL,
+
+    snapshot_tipo_inmueble VARCHAR(80) NULL,
+    snapshot_barrio VARCHAR(150) NULL,
+    snapshot_fuente VARCHAR(100) NULL,
+    snapshot_precio DECIMAL(15,0) NULL,
+    snapshot_link TEXT NULL,
+
+    fecha_creacion TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_comentarios_comparacion_publicacion (publicacion_id),
+    INDEX idx_comentarios_comparacion_raiz (publicacion_raiz_id),
+    INDEX idx_comentarios_comparacion_tipo (tipo)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
