@@ -24,12 +24,16 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  addComentarioComparacion,
   addNotaPublicacion,
   deletePublicacion,
   descartarCoincidenciaPublicaciones,
+  eliminarPublicacionConMotivo,
+  getComentariosComparacion,
   getComparacionPublicaciones,
   getNotasPublicacion,
   validatePublicacionLinks,
+  type ComentarioComparacionItem,
   type ComparacionPublicacion,
   type CoincidenciaPublicacion,
   type NotaPublicacion,
@@ -78,6 +82,13 @@ type ComparisonDismissTarget = {
   coincidenciaId: number
   rootId: number
   relatedId: number
+}
+// Eliminacion decidida desde la comparacion: exige motivo, que queda guardado
+// aunque la publicacion deje de existir (ver migracion 009).
+type ComparisonDeleteTarget = {
+  publicacionId: number
+  rootId: number
+  etiqueta: string
 }
 
 function thumbSrc(src: string, width: number) {
@@ -332,6 +343,12 @@ export function PublicacionesManagerPro({
   const [comparisonLoading, setComparisonLoading] = useState(false)
   const [comparisonToDismiss, setComparisonToDismiss] = useState<ComparisonDismissTarget | null>(null)
   const [comparisonDismissLoading, setComparisonDismissLoading] = useState(false)
+  const [comparisonComments, setComparisonComments] = useState<Record<number, ComentarioComparacionItem[]>>({})
+  const [comparisonCommentDrafts, setComparisonCommentDrafts] = useState<Record<number, string>>({})
+  const [comparisonCommentSaving, setComparisonCommentSaving] = useState<number | null>(null)
+  const [comparisonToDelete, setComparisonToDelete] = useState<ComparisonDeleteTarget | null>(null)
+  const [comparisonDeleteMotivo, setComparisonDeleteMotivo] = useState("")
+  const [comparisonDeleteLoading, setComparisonDeleteLoading] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -479,14 +496,22 @@ export function PublicacionesManagerPro({
   async function openComparison(row: Row) {
     setDetail(null)
     setComparisonToDismiss(null)
+    setComparisonToDelete(null)
     setComparisonRootId(row.id)
     setComparisonRows([])
     setComparisonImages({})
+    setComparisonComments({})
+    setComparisonCommentDrafts({})
     setComparisonLoading(true)
 
     try {
       const rows = await getComparacionPublicaciones(row.id)
       setComparisonRows(rows)
+      // Los comentarios van en una sola consulta para todas las tarjetas; las
+      // imagenes siguen siendo un fetch por publicacion (endpoint existente).
+      void getComentariosComparacion(rows.map((item) => item.id))
+        .then(setComparisonComments)
+        .catch(() => setComparisonComments({}))
       const imageEntries = await Promise.all(rows.map(async (item) => {
         try {
           const response = await fetch(`/api/publicaciones/${item.id}/imagenes`)
@@ -540,6 +565,83 @@ export function PublicacionesManagerPro({
       })
     } finally {
       setComparisonDismissLoading(false)
+    }
+  }
+
+  async function saveComparisonComment(publicacionId: number) {
+    const contenido = (comparisonCommentDrafts[publicacionId] ?? "").trim()
+    if (!contenido || comparisonCommentSaving !== null) return
+
+    setComparisonCommentSaving(publicacionId)
+    try {
+      const result = await addComentarioComparacion({
+        publicacionId,
+        publicacionRaizId: comparisonRootId,
+        contenido,
+      })
+      if (!result.success) {
+        toast.error("No se pudo guardar el comentario", { description: result.error })
+        return
+      }
+
+      // El id real lo asigna MySQL; para la lista optimista alcanza uno
+      // negativo, que no colisiona con ninguno persistido.
+      setComparisonComments((current) => ({
+        ...current,
+        [publicacionId]: [{ ...result.comentario, id: -Date.now() }, ...(current[publicacionId] ?? [])],
+      }))
+      setComparisonCommentDrafts((current) => ({ ...current, [publicacionId]: "" }))
+      toast.success("Comentario guardado.")
+    } catch (error) {
+      toast.error("No se pudo guardar el comentario", {
+        description: error instanceof Error ? error.message : "Error desconocido",
+      })
+    } finally {
+      setComparisonCommentSaving(null)
+    }
+  }
+
+  async function confirmDeleteFromComparison() {
+    const target = comparisonToDelete
+    const motivo = comparisonDeleteMotivo.trim()
+    if (!target || !motivo || comparisonDeleteLoading) return
+
+    setComparisonDeleteLoading(true)
+    try {
+      const result = await eliminarPublicacionConMotivo({
+        publicacionId: target.publicacionId,
+        publicacionRaizId: target.rootId,
+        motivo,
+      })
+      if (!result.success) {
+        toast.error("No se pudo eliminar la publicacion", { description: result.error })
+        return
+      }
+
+      const remainingRows = comparisonRows.filter((item) => item.id !== target.publicacionId)
+      setComparisonRows(remainingRows)
+      setComparisonImages((current) => {
+        const next = { ...current }
+        delete next[target.publicacionId]
+        return next
+      })
+      setComparisonToDelete(null)
+      setComparisonDeleteMotivo("")
+      // Si se elimino la publicacion desde la que se abrio la comparacion, o
+      // ya no queda con quien comparar, el modal pierde sentido.
+      if (target.publicacionId === target.rootId || remainingRows.length < 2) {
+        setComparisonRootId(null)
+      }
+      toast.success(`Publicacion #${target.publicacionId} eliminada`, {
+        description: "El motivo quedo guardado en la bitacora de eliminaciones.",
+      })
+      router.refresh()
+    } catch (error) {
+      toast.error("No se pudo eliminar la publicacion", {
+        description: error instanceof Error ? error.message : "Error desconocido",
+      })
+    } finally {
+      setComparisonDeleteLoading(false)
     }
   }
 
@@ -1181,7 +1283,7 @@ export function PublicacionesManagerPro({
               Comparar publicaciones repetidas
             </DialogTitle>
             <DialogDescription>
-              Revisa imágenes y datos generales lado a lado antes de tomar una decisión.
+              Revisa imágenes y datos generales lado a lado antes de tomar una decisión. Puedes dejar comentarios en cada publicación; al eliminar una, el motivo queda guardado.
             </DialogDescription>
           </DialogHeader>
 
@@ -1225,7 +1327,82 @@ export function PublicacionesManagerPro({
                         <CompareValue label="Dirección" value={item.direccion || "-"} className="col-span-2" />
                       </div>
                       {item.descripcion && <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>}
+
+                      <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
+                        <div className="flex items-center gap-2">
+                          <MessageSquareText className="size-4 text-muted-foreground" />
+                          <p className="text-xs font-medium">Comentarios</p>
+                        </div>
+
+                        {(comparisonComments[item.id]?.length ?? 0) > 0 && (
+                          <div className="max-h-44 space-y-2 overflow-y-auto pr-1">
+                            {comparisonComments[item.id].map((comentario) => (
+                              <div
+                                key={comentario.id}
+                                className={`rounded-md border bg-background p-2 text-xs ${comentario.tipo === "eliminacion" ? "border-rose-300 dark:border-rose-400/40" : ""}`}
+                              >
+                                {comentario.tipo === "eliminacion" && (
+                                  <Badge variant="outline" className="tone-rose mb-1.5 gap-1 border text-[10px]">
+                                    <Trash2 className="size-3" />
+                                    Motivo de eliminación
+                                  </Badge>
+                                )}
+                                <p className="whitespace-pre-wrap leading-relaxed">{comentario.contenido}</p>
+                                <p className="mt-1 text-[11px] text-muted-foreground">{formatDate(comentario.fechaCreacion)}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        <Textarea
+                          value={comparisonCommentDrafts[item.id] ?? ""}
+                          onChange={(event) =>
+                            setComparisonCommentDrafts((current) => ({ ...current, [item.id]: event.target.value }))
+                          }
+                          placeholder="Por qué esta sí / esta no..."
+                          rows={2}
+                          className="bg-background text-xs"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="w-full gap-2"
+                          disabled={
+                            comparisonCommentSaving !== null ||
+                            !(comparisonCommentDrafts[item.id] ?? "").trim()
+                          }
+                          onClick={() => void saveComparisonComment(item.id)}
+                        >
+                          {comparisonCommentSaving === item.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <MessageSquareText className="size-4" />
+                          )}
+                          {comparisonCommentSaving === item.id ? "Guardando..." : "Guardar comentario"}
+                        </Button>
+                      </div>
+
                       <div className="space-y-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="tone-rose w-full gap-2 border hover:bg-rose-100 dark:hover:bg-rose-400/15"
+                          onClick={() => {
+                            if (comparisonRootId == null) return
+                            setComparisonDeleteMotivo("")
+                            setComparisonToDelete({
+                              publicacionId: item.id,
+                              rootId: comparisonRootId,
+                              etiqueta: [item.tipoInmueble, item.barrio, item.fuenteNombre]
+                                .filter(Boolean)
+                                .join(" · ") || `Publicación #${item.id}`,
+                            })
+                          }}
+                        >
+                          <Trash2 className="size-4" />
+                          Eliminar esta
+                        </Button>
                         {!isRoot && item.coincidenciaId !== null && (
                           <Button
                             type="button"
@@ -1265,6 +1442,67 @@ export function PublicacionesManagerPro({
               No se encontraron publicaciones relacionadas para comparar.
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={comparisonToDelete !== null}
+        onOpenChange={(open) => {
+          if (!open && !comparisonDeleteLoading) {
+            setComparisonToDelete(null)
+            setComparisonDeleteMotivo("")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trash2 className="size-5 text-destructive" />
+              Eliminar publicación #{comparisonToDelete?.publicacionId}
+            </DialogTitle>
+            <DialogDescription>
+              {comparisonToDelete?.etiqueta}. Se eliminará la publicación junto con sus imágenes y coincidencias. El motivo que escribas queda guardado aunque la publicación ya no exista.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="motivo-eliminacion">
+              Motivo de la eliminación
+            </label>
+            <Textarea
+              id="motivo-eliminacion"
+              value={comparisonDeleteMotivo}
+              onChange={(event) => setComparisonDeleteMotivo(event.target.value)}
+              placeholder="Ej: repetida de la #1234, mismo inmueble publicado por otra inmobiliaria con menos fotos."
+              rows={4}
+              disabled={comparisonDeleteLoading}
+            />
+            <p className="text-xs text-muted-foreground">Obligatorio: sin motivo no se elimina.</p>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setComparisonToDelete(null)
+                setComparisonDeleteMotivo("")
+              }}
+              disabled={comparisonDeleteLoading}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => void confirmDeleteFromComparison()}
+              disabled={comparisonDeleteLoading || !comparisonDeleteMotivo.trim()}
+              className="gap-2"
+            >
+              {comparisonDeleteLoading ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              {comparisonDeleteLoading ? "Eliminando..." : "Eliminar con este motivo"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
