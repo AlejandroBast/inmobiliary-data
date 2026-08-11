@@ -3,7 +3,7 @@
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { db, pool } from "@/lib/db"
-import { barrios, fuentesInmobiliarias, phConjuntos, publicacionNotas, publicaciones, tiposInmueble } from "@/lib/db/schema"
+import { barrios, comentariosComparacion, fuentesInmobiliarias, phConjuntos, publicacionNotas, publicaciones, tiposInmueble } from "@/lib/db/schema"
 import { and, desc, eq, sql } from "drizzle-orm"
 import type { ResultSetHeader, RowDataPacket } from "mysql2"
 import type { PoolConnection } from "mysql2/promise"
@@ -1217,6 +1217,186 @@ export async function addNotaPublicacion(publicacionId: number, contenido: strin
   } catch (error) {
     return { success: false as const, error: parseError(error) }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Comentarios de la comparacion de duplicados (migracion 009)
+//
+// Separados a proposito del historial de notas de arriba: publicacion_notas
+// cae en cascada con la publicacion, y estos comentarios existen justamente
+// para explicar por que se elimino una. Ver el comentario de la tabla en
+// lib/db/schema.ts.
+// ---------------------------------------------------------------------------
+
+export type ComentarioComparacionItem = {
+  id: number
+  publicacionId: number
+  tipo: "comentario" | "eliminacion"
+  contenido: string
+  fechaCreacion: string
+}
+
+// Los datos con los que se reconoce el inmueble en la tarjeta de comparacion.
+// Se copian en cada fila porque despues de eliminar la publicacion es lo unico
+// que queda para saber sobre que se estaba decidiendo.
+async function snapshotPublicacion(publicacionId: number) {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT p.tipo_inmueble, p.barrio, p.precio, p.link_origen, f.nombre AS fuente_nombre
+     FROM publicaciones p
+     LEFT JOIN fuentes_inmobiliarias f ON f.id = p.fuente_id
+     WHERE p.id = ?`,
+    [publicacionId],
+  )
+  const row = rows[0]
+  if (!row) return null
+
+  return {
+    snapshotTipoInmueble: row.tipo_inmueble == null ? null : String(row.tipo_inmueble),
+    snapshotBarrio: row.barrio == null ? null : String(row.barrio),
+    snapshotFuente: row.fuente_nombre == null ? null : String(row.fuente_nombre),
+    snapshotPrecio: row.precio == null ? null : String(row.precio),
+    snapshotLink: row.link_origen == null ? null : String(row.link_origen),
+  }
+}
+
+// Trae los comentarios de todas las tarjetas de una comparacion en una sola
+// consulta, para no disparar un request por tarjeta al abrir el modal.
+export async function getComentariosComparacion(
+  publicacionIds: number[],
+): Promise<Record<number, ComentarioComparacionItem[]>> {
+  const ids = [...new Set(publicacionIds.filter((id) => Number.isInteger(id) && id > 0))]
+  const grouped: Record<number, ComentarioComparacionItem[]> = {}
+  if (ids.length === 0) return grouped
+
+  const placeholders = ids.map(() => "?").join(", ")
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT id, publicacion_id, tipo, contenido, fecha_creacion
+     FROM comentarios_comparacion
+     WHERE publicacion_id IN (${placeholders})
+     ORDER BY fecha_creacion DESC, id DESC`,
+    ids,
+  )
+
+  for (const row of rows) {
+    const publicacionId = Number(row.publicacion_id)
+    grouped[publicacionId] ??= []
+    grouped[publicacionId].push({
+      id: Number(row.id),
+      publicacionId,
+      tipo: row.tipo as "comentario" | "eliminacion",
+      contenido: String(row.contenido),
+      fechaCreacion: new Date(row.fecha_creacion).toISOString(),
+    })
+  }
+
+  return grouped
+}
+
+export async function addComentarioComparacion(input: {
+  publicacionId: number
+  publicacionRaizId: number | null
+  contenido: string
+}) {
+  const contenido = input.contenido.trim()
+  if (!contenido) {
+    return { success: false as const, error: "El comentario no puede estar vacío." }
+  }
+  if (!Number.isInteger(input.publicacionId) || input.publicacionId <= 0) {
+    return { success: false as const, error: "La publicación seleccionada no es válida." }
+  }
+
+  try {
+    const snapshot = await snapshotPublicacion(input.publicacionId)
+    if (!snapshot) {
+      return { success: false as const, error: "La publicación ya no existe." }
+    }
+
+    const fechaCreacion = new Date()
+    await db.insert(comentariosComparacion).values({
+      publicacionId: input.publicacionId,
+      publicacionRaizId: input.publicacionRaizId,
+      tipo: "comentario",
+      contenido,
+      fechaCreacion,
+      ...snapshot,
+    })
+
+    revalidatePath("/")
+    return {
+      success: true as const,
+      comentario: {
+        id: 0,
+        publicacionId: input.publicacionId,
+        tipo: "comentario" as const,
+        contenido,
+        fechaCreacion: fechaCreacion.toISOString(),
+      },
+    }
+  } catch (error) {
+    return { success: false as const, error: parseError(error) }
+  }
+}
+
+// Elimina exigiendo un motivo. El motivo se inserta ANTES del DELETE y ambas
+// operaciones van en la misma transaccion: si el borrado falla se revierte
+// tambien el comentario (no hay nada que justificar), y si el commit pasa
+// quedan las dos. Al reves se perderia la justificacion cuando mas importa.
+export async function eliminarPublicacionConMotivo(input: {
+  publicacionId: number
+  publicacionRaizId: number | null
+  motivo: string
+}) {
+  const motivo = input.motivo.trim()
+  if (!motivo) {
+    return { success: false as const, error: "Escribe el motivo de la eliminación." }
+  }
+  if (!Number.isInteger(input.publicacionId) || input.publicacionId <= 0) {
+    return { success: false as const, error: "La publicación seleccionada no es válida." }
+  }
+
+  const snapshot = await snapshotPublicacion(input.publicacionId)
+  if (!snapshot) {
+    return { success: false as const, error: "La publicación ya no existe." }
+  }
+
+  const connection = await pool.getConnection()
+  try {
+    await connection.beginTransaction()
+
+    await connection.query(
+      `INSERT INTO comentarios_comparacion
+         (publicacion_id, publicacion_raiz_id, tipo, contenido,
+          snapshot_tipo_inmueble, snapshot_barrio, snapshot_fuente,
+          snapshot_precio, snapshot_link)
+       VALUES (?, ?, 'eliminacion', ?, ?, ?, ?, ?, ?)`,
+      [
+        input.publicacionId,
+        input.publicacionRaizId,
+        motivo,
+        snapshot.snapshotTipoInmueble,
+        snapshot.snapshotBarrio,
+        snapshot.snapshotFuente,
+        snapshot.snapshotPrecio,
+        snapshot.snapshotLink,
+      ],
+    )
+
+    const [result] = await connection.query<ResultSetHeader>(
+      "DELETE FROM publicaciones WHERE id = ?",
+      [input.publicacionId],
+    )
+    if (result.affectedRows === 0) throw new Error("La publicación ya no existe.")
+
+    await connection.commit()
+  } catch (error) {
+    await connection.rollback()
+    return { success: false as const, error: parseError(error) }
+  } finally {
+    connection.release()
+  }
+
+  revalidatePath("/")
+  return { success: true as const }
 }
 
 // Marca manual de link caido, independiente del chequeo automatico
