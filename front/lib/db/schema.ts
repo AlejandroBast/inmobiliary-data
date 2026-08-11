@@ -4,6 +4,7 @@ import {
   decimal,
   json,
   int,
+  mysqlEnum,
   mysqlTable,
   text,
   timestamp,
@@ -90,9 +91,30 @@ export const publicacionNotas = mysqlTable("publicacion_notas", {
   fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
 })
 
+// Comentarios escritos en la comparacion de duplicados y motivo de cada
+// eliminacion (migracion 009). Ojo con la diferencia contra publicacionNotas:
+// aca publicacionId NO es una clave foranea. La tabla existe para justificar
+// por que se borro un inmueble, asi que sus filas tienen que sobrevivir a ese
+// borrado; los snapshot* guardan como se veia la publicacion al comentarla,
+// que es lo unico que queda de ella despues.
+export const comentariosComparacion = mysqlTable("comentarios_comparacion", {
+  id: bigint("id", { mode: "number" }).primaryKey().autoincrement(),
+  publicacionId: bigint("publicacion_id", { mode: "number" }).notNull(),
+  publicacionRaizId: bigint("publicacion_raiz_id", { mode: "number" }),
+  tipo: mysqlEnum("tipo", ["comentario", "eliminacion"]).notNull().default("comentario"),
+  contenido: text("contenido").notNull(),
+  snapshotTipoInmueble: varchar("snapshot_tipo_inmueble", { length: 80 }),
+  snapshotBarrio: varchar("snapshot_barrio", { length: 150 }),
+  snapshotFuente: varchar("snapshot_fuente", { length: 100 }),
+  snapshotPrecio: decimal("snapshot_precio", { precision: 15, scale: 0 }),
+  snapshotLink: text("snapshot_link"),
+  fechaCreacion: timestamp("fecha_creacion").notNull().defaultNow(),
+})
+
 export type Publicacion = typeof publicaciones.$inferSelect
 export type Fuente = typeof fuentesInmobiliarias.$inferSelect
 export type Barrio = typeof barrios.$inferSelect
 export type TipoInmueble = typeof tiposInmueble.$inferSelect
 export type PhConjunto = typeof phConjuntos.$inferSelect
 export type PublicacionNota = typeof publicacionNotas.$inferSelect
+export type ComentarioComparacion = typeof comentariosComparacion.$inferSelect
