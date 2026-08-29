@@ -325,3 +325,29 @@ CREATE TABLE comentarios_comparacion (
     INDEX idx_comentarios_comparacion_raiz (publicacion_raiz_id),
     INDEX idx_comentarios_comparacion_tipo (tipo)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =========================================================
+-- Fusionado aca desde la migracion 010
+-- (db/migrations/010_precio_historial.sql): historial de precio por
+-- publicacion, que llena scripts/refresh_publicaciones.py cuando vuelve a
+-- visitar una publicacion ya guardada y el precio cambio desde la captura.
+-- Mismo patron que publicacion_notas: una fila por cada cambio, no un campo
+-- que se sobreescribe. publicaciones.precio siempre queda con el valor mas
+-- reciente; esta tabla es la unica que guarda los valores anteriores.
+
+CREATE TABLE publicacion_precio_historial (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    publicacion_id BIGINT NOT NULL,
+    precio_anterior DECIMAL(15,0) NULL,
+    precio_nuevo DECIMAL(15,0) NOT NULL,
+    detectado_en TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_publicacion_precio_historial_publicacion
+        FOREIGN KEY (publicacion_id)
+        REFERENCES publicaciones(id)
+        ON UPDATE CASCADE
+        ON DELETE CASCADE,
+
+    INDEX idx_publicacion_precio_historial_publicacion (publicacion_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
