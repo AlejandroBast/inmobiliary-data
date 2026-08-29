@@ -223,6 +223,42 @@ y viernes:
 El script resuelve rutas por su propia ubicación (no depende del `cwd` de
 cron) y usa `SCRAPER_PYTHON` si está definida, igual que el front.
 
+### Re-verificación de publicaciones ya guardadas
+
+`scripts/refresh_publicaciones.py` vuelve a visitar cada publicación ya
+guardada con el extractor real de su portal (no un simple GET) para detectar
+dos cosas que `run_scheduled_scrapers.py` nunca revisa porque solo procesa
+links nuevos:
+
+- **El link ya no lleva a la publicación** (retirada, vendida, sesión de
+  Facebook vencida): queda escrito en `links_adicionales.link_check`, que el
+  front ya usa para pintar la fila de rojo.
+- **El vendedor cambió el precio o alguna especificación** (m2, habitaciones,
+  baños, parqueaderos, administración, estrato): actualiza la fila y, si fue
+  el precio, guarda el valor anterior en `publicacion_precio_historial`
+  (migración 010) en vez de perderlo.
+
+```powershell
+py -3 scripts/refresh_publicaciones.py                  # los cinco portales
+py -3 scripts/refresh_publicaciones.py --only fincaraiz  # un solo portal
+py -3 scripts/refresh_publicaciones.py --limit 20        # prueba acotada
+py -3 scripts/refresh_publicaciones.py --dry-run         # imprime sin escribir
+```
+
+Es más caro que el chequeo liviano (abre un browser Playwright real para
+cuatro de los cinco portales), así que se agenda semanal, junto a la corrida
+completa de los lunes:
+
+```cron
+0 14 * * 1 /ruta/al/repo/.venv/bin/python /ruta/al/repo/scripts/refresh_publicaciones.py >> /ruta/al/repo/logs/scheduled/refresh_publicaciones.log 2>&1
+```
+
+Requiere haber aplicado antes la migración 010:
+
+```bash
+mysql -u root -p db_inmobiliary_data < db/migrations/010_precio_historial.sql
+```
+
 ### Scripts operativos
 
 | Comando | Qué hace |
@@ -233,6 +269,7 @@ cron) y usa `SCRAPER_PYTHON` si está definida, igual que el front.
 | `py -3 scripts/backfill_duplicate_detection.py` | Reanaliza duplicados en publicaciones ya guardadas |
 | `py -3 scripts/backfill_location_normalization.py` | Renormaliza los barrios ya guardados |
 | `py -3 scripts/backfill_ph_catalog.py` | Relaciona publicaciones ya guardadas con un nombre de PH del catálogo (ver abajo) |
+| `py -3 scripts/refresh_publicaciones.py` | Re-visita publicaciones guardadas: detecta links caídos y cambios de precio/especificaciones (ver arriba) |
 | `py -3 scripts/import_excel_ventas.py <archivo.xlsx>` | Importa la hoja **Ventas** del Excel del cliente (ver abajo) |
 
 ### Importar el Excel del cliente
