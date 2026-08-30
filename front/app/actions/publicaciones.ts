@@ -4,25 +4,25 @@ import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { db, pool } from "@/lib/db"
 import { barrios, comentariosComparacion, fuentesInmobiliarias, phConjuntos, publicacionNotas, publicaciones, tiposInmueble } from "@/lib/db/schema"
-import { and, desc, eq, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, or, sql } from "drizzle-orm"
 import type { ResultSetHeader, RowDataPacket } from "mysql2"
 import type { PoolConnection } from "mysql2/promise"
 import { revalidatePath } from "next/cache"
 
 export type PublicacionFilters = {
   id?: string | null
-  tipoInmueble?: string | null
+  tipoInmueble?: string | string[] | null
   fuenteId?: string | null
   fecha?: string | null
   habitaciones?: string | null
   banios?: string | null
-  barrio?: string | null
-  ubicacion?: string | null
+  barrio?: string | string[] | null
+  ubicacion?: string | string[] | null
   precioMin?: string | null
   precioMax?: string | null
   m2Min?: string | null
   m2Max?: string | null
-  phTipo?: string | null
+  phTipo?: string | string[] | null
   parqueadero?: string | null
   duplicados?: string | null
 }
@@ -152,6 +152,14 @@ interface AristaGrupoRow extends RowDataPacket {
 function cleanFilter(value?: string | null) {
   const cleaned = value?.trim()
   return cleaned ? cleaned : null
+}
+
+// Los filtros de categoria (barrio, tipo de inmueble, PH) admiten seleccion
+// multiple: la URL repite el mismo query param (?barrio=A&barrio=B) y esto
+// normaliza tanto ese caso como el de un unico valor string.
+function toArray(value?: string | string[] | null): string[] {
+  const raw = Array.isArray(value) ? value : value ? [value] : []
+  return Array.from(new Set(raw.map((item) => item.trim()).filter(Boolean)))
 }
 
 function parseNumericFilter(value?: string | null) {
@@ -345,9 +353,12 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     }
   }
 
-  const tipoInmueble = cleanFilter(filters.tipoInmueble)
-  if (tipoInmueble) {
-    conditions.push(sql`${publicaciones.tipoInmueble} LIKE ${`%${tipoInmueble}%`}`)
+  const tipoInmuebleValues = toArray(filters.tipoInmueble)
+  if (tipoInmuebleValues.length > 0) {
+    const tipoInmuebleCondition = or(
+      ...tipoInmuebleValues.map((value) => sql`${publicaciones.tipoInmueble} LIKE ${`%${value}%`}`),
+    )
+    if (tipoInmuebleCondition) conditions.push(tipoInmuebleCondition)
   }
 
   const fuenteId = cleanFilter(filters.fuenteId)
@@ -410,25 +421,40 @@ export async function getPublicaciones(filters: PublicacionFilters = {}) {
     conditions.push(sql`${m2Sql()} <= ${m2Max}`)
   }
 
-  const phTipo = cleanFilter(filters.phTipo)
-  if (phTipo === "__sin_ph") {
-    conditions.push(sql`(${publicaciones.ph} IS NULL OR TRIM(${publicaciones.ph}) = '')`)
-  } else if (phTipo === "ph") {
-    conditions.push(sql`${publicaciones.ph} IS NOT NULL AND TRIM(${publicaciones.ph}) <> ''`)
-  } else if (phTipo) {
-    // Nombre puntual del catalogo de PH (ph_conjuntos): coincidencia exacta,
-    // porque publicaciones.ph guarda el nombre canonico devuelto por detect_ph.
-    conditions.push(eq(publicaciones.ph, phTipo))
+  const phTipoValues = toArray(filters.phTipo)
+  if (phTipoValues.length > 0) {
+    const phNames = phTipoValues.filter((value) => value !== "ph" && value !== "__sin_ph")
+    const phParts = []
+    if (phTipoValues.includes("__sin_ph")) {
+      phParts.push(sql`(${publicaciones.ph} IS NULL OR TRIM(${publicaciones.ph}) = '')`)
+    }
+    if (phTipoValues.includes("ph")) {
+      phParts.push(sql`(${publicaciones.ph} IS NOT NULL AND TRIM(${publicaciones.ph}) <> '')`)
+    }
+    if (phNames.length > 0) {
+      // Nombre puntual del catalogo de PH (ph_conjuntos): coincidencia exacta,
+      // porque publicaciones.ph guarda el nombre canonico devuelto por detect_ph.
+      phParts.push(inArray(publicaciones.ph, phNames))
+    }
+    const phCondition = or(...phParts)
+    if (phCondition) conditions.push(phCondition)
   }
 
-  const barrio = cleanFilter(filters.barrio) ?? cleanFilter(filters.ubicacion)
-  if (barrio === "__sin_barrio") {
-    conditions.push(sql`(${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = '')`)
-  } else {
-    const barrioNormalizado = normalizeBarrio(barrio)
-    if (barrioNormalizado) {
-      conditions.push(sql`${barrioSql()} = ${barrioNormalizado}`)
+  const barrioValues = toArray(filters.barrio).length > 0 ? toArray(filters.barrio) : toArray(filters.ubicacion)
+  if (barrioValues.length > 0) {
+    const barrioParts = []
+    if (barrioValues.includes("__sin_barrio")) {
+      barrioParts.push(sql`(${publicaciones.barrio} IS NULL OR TRIM(${publicaciones.barrio}) = '')`)
     }
+    const barriosNormalizados = barrioValues
+      .filter((value) => value !== "__sin_barrio")
+      .map((value) => normalizeBarrio(value))
+      .filter((value): value is string => Boolean(value))
+    if (barriosNormalizados.length > 0) {
+      barrioParts.push(sql`${barrioSql()} IN (${sql.join(barriosNormalizados.map((value) => sql`${value}`), sql`, `)})`)
+    }
+    const barrioCondition = or(...barrioParts)
+    if (barrioCondition) conditions.push(barrioCondition)
   }
 
   const duplicados = cleanFilter(filters.duplicados)
