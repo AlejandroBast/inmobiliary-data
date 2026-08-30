@@ -26,6 +26,11 @@ function firstValue(value: string | string[] | undefined) {
   return value ?? ""
 }
 
+function allValues(value: string | string[] | undefined) {
+  const raw = Array.isArray(value) ? value : value ? [value] : []
+  return raw.map((item) => item.trim()).filter(Boolean)
+}
+
 function hasActiveFilters(filters: PublicacionFilters) {
   return Object.values(filters).some((value) => String(value ?? "").trim() !== "")
 }
@@ -56,19 +61,23 @@ export default async function Page({
 }) {
   const params = (await searchParams) ?? {}
 
+  const tipoInmuebleValues = allValues(params.tipoInmueble)
+  const phTipoValues = allValues(params.phTipo)
+  const barrioValues = allValues(params.barrio).length ? allValues(params.barrio) : allValues(params.ubicacion)
+
   const filtros: PublicacionFilters = {
     id: firstValue(params.id),
-    tipoInmueble: firstValue(params.tipoInmueble),
+    tipoInmueble: tipoInmuebleValues,
     fuenteId: firstValue(params.fuenteId),
     fecha: firstValue(params.fecha),
     habitaciones: firstValue(params.habitaciones),
     banios: firstValue(params.banios),
-    barrio: firstValue(params.barrio) || firstValue(params.ubicacion),
+    barrio: barrioValues,
     precioMin: firstValue(params.precioMin),
     precioMax: firstValue(params.precioMax),
     m2Min: firstValue(params.m2Min),
     m2Max: firstValue(params.m2Max),
-    phTipo: firstValue(params.phTipo),
+    phTipo: phTipoValues,
     parqueadero: firstValue(params.parqueadero),
     duplicados: firstValue(params.duplicados),
   }
@@ -123,17 +132,17 @@ export default async function Page({
             hasSinPh={phData.hasSinPh}
             initialValues={{
               id: filtros.id ?? undefined,
-              tipoInmueble: filtros.tipoInmueble ?? undefined,
+              tipoInmueble: tipoInmuebleValues,
               fuenteId: filtros.fuenteId ?? undefined,
               fecha: filtros.fecha ?? undefined,
               habitaciones: filtros.habitaciones ?? undefined,
               banios: filtros.banios ?? undefined,
-              barrio: filtros.barrio ?? undefined,
+              barrio: barrioValues,
               precioMin: filtros.precioMin ?? undefined,
               precioMax: filtros.precioMax ?? undefined,
               m2Min: filtros.m2Min ?? undefined,
               m2Max: filtros.m2Max ?? undefined,
-              phTipo: filtros.phTipo ?? undefined,
+              phTipo: phTipoValues,
               parqueadero: filtros.parqueadero ?? undefined,
               duplicados: filtros.duplicados ?? undefined,
             }}
