@@ -16,6 +16,9 @@ import {
 } from "@/components/ui/select"
 import {
   Combobox,
+  ComboboxChip,
+  ComboboxChipRemove,
+  ComboboxChips,
   ComboboxContent,
   ComboboxInput,
   ComboboxInputGroup,
@@ -28,18 +31,18 @@ import { AlertTriangle, CalendarDays, Eraser, Filter, Home, MapPinned, Ruler, Se
 
 type FiltrosValue = {
   id: string
-  tipoInmueble: string
+  tipoInmueble: string[]
   fuenteId: string
   fecha: string
   habitaciones: string
   banios: string
   parqueadero: string
-  barrio: string
+  barrio: string[]
   precioMin: string
   precioMax: string
   m2Min: string
   m2Max: string
-  phTipo: string
+  phTipo: string[]
   duplicados: string
 }
 
@@ -51,18 +54,18 @@ type PricePreset = {
 
 const initialFilters: FiltrosValue = {
   id: "",
-  tipoInmueble: "",
+  tipoInmueble: [],
   fuenteId: "",
   fecha: "",
   habitaciones: "",
   banios: "",
   parqueadero: "",
-  barrio: "",
+  barrio: [],
   precioMin: "",
   precioMax: "",
   m2Min: "",
   m2Max: "",
-  phTipo: "",
+  phTipo: [],
   duplicados: "",
 }
 
@@ -107,6 +110,54 @@ function activeCount(values: FiltrosValue) {
   }).length
 }
 
+function MultiSelectField({
+  id,
+  placeholder,
+  items,
+  values,
+  onChange,
+}: {
+  id: string
+  placeholder: string
+  items: Array<{ value: string; label: string }>
+  values: string[]
+  onChange: (values: string[]) => void
+}) {
+  const [query, setQuery] = useState("")
+  const labelFor = (value: string) => items.find((item) => item.value === value)?.label ?? value
+
+  return (
+    <Combobox
+      items={items}
+      value={values}
+      onValueChange={(next) => onChange(next ?? [])}
+      multiple
+      inputValue={query}
+      onInputValueChange={setQuery}
+    >
+      <ComboboxInputGroup>
+        <ComboboxChips>
+          {values.map((value) => (
+            <ComboboxChip key={value}>
+              {labelFor(value)}
+              <ComboboxChipRemove aria-label={`Quitar ${labelFor(value)}`} />
+            </ComboboxChip>
+          ))}
+        </ComboboxChips>
+        <ComboboxInput id={id} placeholder={values.length ? "" : placeholder} />
+        <ComboboxTriggerIcon />
+      </ComboboxInputGroup>
+      <ComboboxContent emptyMessage="Sin coincidencias.">
+        {(item: { value: string; label: string }) => (
+          <ComboboxItem key={item.value} value={item.value}>
+            {item.label}
+          </ComboboxItem>
+        )}
+      </ComboboxContent>
+    </Combobox>
+  )
+}
+
 export function PublicacionesFiltrosPro({
   fuentes,
   barrios,
@@ -142,12 +193,18 @@ export function PublicacionesFiltrosPro({
   const totalActive = useMemo(() => activeCount(values), [values])
   const phItems = useMemo(
     () => [
-      { value: "all", label: "Todas" },
       { value: "ph", label: "Cualquier PH" },
       ...(hasSinPh ? [{ value: "__sin_ph", label: "Sin PH" }] : []),
       ...phNombres,
     ],
     [phNombres, hasSinPh],
+  )
+  const barrioItems = useMemo(
+    () => [
+      ...(hasSinBarrio ? [{ value: "__sin_barrio", label: "Sin barrio" }] : []),
+      ...barrios,
+    ],
+    [barrios, hasSinBarrio],
   )
   const minCOP = moneyValue(values.precioMin)
   const maxCOP = moneyValue(values.precioMax)
@@ -204,11 +261,19 @@ export function PublicacionesFiltrosPro({
     params.delete("ubicacion")
 
     Object.entries(values).forEach(([key, value]) => {
+      params.delete(key)
+
+      if (Array.isArray(value)) {
+        value
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .forEach((item) => params.append(key, item))
+        return
+      }
+
       const cleanValue = String(value || "").trim()
       if (cleanValue && cleanValue !== "all") {
         params.set(key, cleanValue)
-      } else {
-        params.delete(key)
       }
     })
 
@@ -252,19 +317,13 @@ export function PublicacionesFiltrosPro({
             />
           </Field>
           <Field label="Tipo de inmueble" htmlFor="filtro-tipo">
-            <Select value={values.tipoInmueble} onValueChange={(value) => setField("tipoInmueble", value ?? "")}>
-              <SelectTrigger id="filtro-tipo">
-                <SelectValue placeholder="Todos los tipos" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los tipos</SelectItem>
-                {tiposInmueble.map((tipo) => (
-                  <SelectItem key={tipo.value} value={tipo.value}>
-                    {tipo.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiSelectField
+              id="filtro-tipo"
+              placeholder="Todos los tipos"
+              items={tiposInmueble}
+              values={values.tipoInmueble}
+              onChange={(next) => setField("tipoInmueble", next)}
+            />
           </Field>
           <Field label="Fuente" htmlFor="filtro-fuente">
             <Select value={values.fuenteId} onValueChange={(value) => setField("fuenteId", value ?? "")}>
@@ -282,23 +341,13 @@ export function PublicacionesFiltrosPro({
             </Select>
           </Field>
           <Field label="PH" htmlFor="filtro-ph-tipo">
-            <Combobox
+            <MultiSelectField
+              id="filtro-ph-tipo"
+              placeholder="Buscar PH por nombre..."
               items={phItems}
-              value={values.phTipo || "all"}
-              onValueChange={(value) => setField("phTipo", value === "all" ? "" : (value ?? ""))}
-            >
-              <ComboboxInputGroup>
-                <ComboboxInput id="filtro-ph-tipo" placeholder="Buscar PH por nombre..." />
-                <ComboboxTriggerIcon />
-              </ComboboxInputGroup>
-              <ComboboxContent emptyMessage="Sin coincidencias.">
-                {(item: { value: string; label: string }) => (
-                  <ComboboxItem key={item.value} value={item.value}>
-                    {item.label}
-                  </ComboboxItem>
-                )}
-              </ComboboxContent>
-            </Combobox>
+              values={values.phTipo}
+              onChange={(next) => setField("phTipo", next)}
+            />
           </Field>
           <Field label="Publicaciones repetidas" htmlFor="filtro-duplicados">
             <Select value={values.duplicados} onValueChange={(value) => setField("duplicados", value ?? "")}>
@@ -366,20 +415,13 @@ export function PublicacionesFiltrosPro({
 
         <FilterGroup icon={MapPinned} title="3. Ubicacion y fecha">
           <Field label="Barrio" htmlFor="filtro-barrio">
-            <Select value={values.barrio} onValueChange={(value) => setField("barrio", value ?? "")}>
-              <SelectTrigger id="filtro-barrio">
-                <SelectValue placeholder="Todos los barrios" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Todos los barrios</SelectItem>
-                {hasSinBarrio && <SelectItem value="__sin_barrio">Sin barrio</SelectItem>}
-                {barrios.map((barrio) => (
-                  <SelectItem key={barrio.value} value={barrio.value}>
-                    {barrio.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiSelectField
+              id="filtro-barrio"
+              placeholder="Todos los barrios"
+              items={barrioItems}
+              values={values.barrio}
+              onChange={(next) => setField("barrio", next)}
+            />
           </Field>
           <Field label="Fecha de captura" htmlFor="filtro-fecha">
             <div className="relative">
