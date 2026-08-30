@@ -44,6 +44,7 @@ export function PublicacionForm({
   fuentes,
   barrios,
   tiposInmueble,
+  phNombres,
   open,
   onOpenChange,
   editing,
@@ -51,6 +52,7 @@ export function PublicacionForm({
   fuentes: Fuente[]
   barrios: Array<{ value: string; label: string }>
   tiposInmueble: Array<{ value: string; label: string }>
+  phNombres: Array<{ value: string; label: string }>
   open: boolean
   onOpenChange: (open: boolean) => void
   editing?: Row | null
@@ -74,6 +76,7 @@ export function PublicacionForm({
   }, [fuenteList])
   const [fuenteId, setFuenteId] = useState<string>(editing ? String(editing.fuenteId) : "")
   const [barrio, setBarrio] = useState<string>(editing ? val("barrio") : "")
+  const [ph, setPh] = useState<string>(editing ? val("ph") : "")
   const [tipoInmueble, setTipoInmueble] = useState<string>(editing ? val("tipoInmueble") : "")
   const [images, setImages] = useState<ImageItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
@@ -85,11 +88,14 @@ export function PublicacionForm({
   // suben recien cuando createPublicacion devuelve el id nuevo.
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [uploadingImages, setUploadingImages] = useState(false)
+  const [isDragActive, setIsDragActive] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const dragCounterRef = useRef(0)
 
   useEffect(() => {
     setFuenteId(editing ? String(editing.fuenteId) : "")
     setBarrio(editing ? val("barrio") : "")
+    setPh(editing ? val("ph") : "")
     setTipoInmueble(editing ? val("tipoInmueble") : "")
     const raw = editing?.linksAdicionales
     const manual = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check_manual : null
@@ -166,10 +172,8 @@ export function PublicacionForm({
     return response.json() as Promise<{ success: boolean; error?: string; images?: ImageItem[]; skipped?: string[] }>
   }
 
-  async function handleFilesSelected(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0) return
-    const files = Array.from(fileList)
-    if (fileInputRef.current) fileInputRef.current.value = ""
+  async function addFiles(files: File[]) {
+    if (files.length === 0) return
 
     if (!editing) {
       setPendingFiles((current) => [...current, ...files])
@@ -194,8 +198,99 @@ export function PublicacionForm({
     }
   }
 
+  async function handleFilesSelected(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return
+    const files = Array.from(fileList)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+    await addFiles(files)
+  }
+
   function removePendingFile(file: File) {
     setPendingFiles((current) => current.filter((item) => item !== file))
+  }
+
+  // Al arrastrar una imagen desde otra pestaña del navegador (ej. Facebook) el
+  // navegador casi nunca entrega bytes en dataTransfer.files: solo pasa la URL
+  // de la imagen (uri-list/html/plain). En ese caso se pide al backend que la
+  // descargue el mismo (evita CORS) y el resultado se trata como un archivo mas.
+  function extractDroppedImageUrl(dataTransfer: DataTransfer): string | null {
+    const uriList = dataTransfer.getData("text/uri-list")
+    const fromUriList = uriList
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("#") && /^https?:\/\//i.test(line))
+    if (fromUriList) return fromUriList
+
+    const html = dataTransfer.getData("text/html")
+    const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i)
+    if (imgMatch && /^https?:\/\//i.test(imgMatch[1])) return imgMatch[1]
+
+    const plain = dataTransfer.getData("text/plain").trim()
+    if (/^https?:\/\//i.test(plain)) return plain
+
+    return null
+  }
+
+  async function importRemoteImage(url: string) {
+    setUploadingImages(true)
+    try {
+      const response = await fetch("/api/fetch-remote-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      })
+      if (!response.ok) {
+        const err = (await response.json().catch(() => null)) as { error?: string } | null
+        toast.error(err?.error || "No se pudo importar la imagen arrastrada.")
+        return
+      }
+      const blob = await response.blob()
+      const disposition = response.headers.get("Content-Disposition") ?? ""
+      const nameMatch = disposition.match(/filename="([^"]+)"/)
+      const ext = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg")
+      const filename = nameMatch?.[1] || `imagen_${Date.now()}.${ext}`
+      await addFiles([new File([blob], filename, { type: blob.type })])
+    } catch {
+      toast.error("No se pudo importar la imagen arrastrada.")
+    } finally {
+      setUploadingImages(false)
+    }
+  }
+
+  function handleImagesDragEnter(event: React.DragEvent<HTMLFieldSetElement>) {
+    event.preventDefault()
+    dragCounterRef.current += 1
+    setIsDragActive(true)
+  }
+
+  function handleImagesDragOver(event: React.DragEvent<HTMLFieldSetElement>) {
+    event.preventDefault()
+  }
+
+  function handleImagesDragLeave(event: React.DragEvent<HTMLFieldSetElement>) {
+    event.preventDefault()
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1)
+    if (dragCounterRef.current === 0) setIsDragActive(false)
+  }
+
+  async function handleImagesDrop(event: React.DragEvent<HTMLFieldSetElement>) {
+    event.preventDefault()
+    dragCounterRef.current = 0
+    setIsDragActive(false)
+    if (uploadingImages) return
+
+    const droppedFiles = Array.from(event.dataTransfer.files || [])
+    if (droppedFiles.length > 0) {
+      await addFiles(droppedFiles)
+      return
+    }
+
+    const url = extractDroppedImageUrl(event.dataTransfer)
+    if (!url) {
+      toast.error("No se pudo leer la imagen arrastrada.")
+      return
+    }
+    await importRemoteImage(url)
   }
 
   async function deleteImage(image: ImageItem) {
@@ -253,7 +348,7 @@ export function PublicacionForm({
       ciudad: str("ciudad"),
       barrio: barrio.trim() || null,
       tipoInmueble: tipoInmueble || null,
-      ph: str("ph"),
+      ph: ph.trim() || null,
       estrato: num("estrato"),
       descripcion: str("descripcion"),
       precio: num("precio"),
@@ -472,7 +567,25 @@ export function PublicacionForm({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="ph">PH</Label>
-                <Input id="ph" name="ph" defaultValue={val("ph")} />
+                <Combobox
+                  items={withCreateOption(phNombres, ph)}
+                  value={ph || null}
+                  onValueChange={(v) => setPh(v ?? "")}
+                  inputValue={ph}
+                  onInputValueChange={setPh}
+                >
+                  <ComboboxInputGroup>
+                    <ComboboxInput id="ph" placeholder="Selecciona o escribe un PH" />
+                    <ComboboxTriggerIcon />
+                  </ComboboxInputGroup>
+                  <ComboboxContent emptyMessage="Sin coincidencias.">
+                    {(item: { value: string; label: string; __create?: true }) => (
+                      <ComboboxItem key={item.value} value={item.value} variant={item.__create ? "create" : "default"}>
+                        {item.__create ? `Crear "${item.label}"` : item.label}
+                      </ComboboxItem>
+                    )}
+                  </ComboboxContent>
+                </Combobox>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="estrato">Estrato</Label>
@@ -546,14 +659,20 @@ export function PublicacionForm({
             </div>
           </fieldset>
 
-          <fieldset className="space-y-3">
+          <fieldset
+            className={`space-y-3 rounded-lg border-2 border-dashed p-3 transition-colors ${isDragActive ? "border-primary bg-primary/5" : "border-transparent"}`}
+            onDragEnter={handleImagesDragEnter}
+            onDragOver={handleImagesDragOver}
+            onDragLeave={handleImagesDragLeave}
+            onDrop={(event) => void handleImagesDrop(event)}
+          >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <legend className="text-sm font-medium text-muted-foreground">Imagenes</legend>
                 <p className="text-xs text-muted-foreground">
                   {editing
-                    ? "Sube capturas adicionales o elimina las que no correspondan a esta publicacion."
-                    : "Opcional: elige imagenes para subir. Se guardan cuando crees la publicacion."}
+                    ? "Sube capturas, o arrastralas aqui (incluso una imagen arrastrada desde el navegador, ej. Facebook)."
+                    : "Opcional: elige imagenes o arrastralas aqui (incluso desde el navegador, ej. Facebook). Se guardan cuando crees la publicacion."}
                 </p>
               </div>
               <div className="shrink-0">
@@ -580,6 +699,12 @@ export function PublicacionForm({
               </div>
             </div>
 
+            {isDragActive && (
+              <div className="flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-primary bg-primary/10 p-4 text-sm font-medium text-primary">
+                <Upload className="size-4" /> Suelta la imagen aqui
+              </div>
+            )}
+
             {editing && (
               imagesLoading ? (
                 <div className="flex items-center gap-2 rounded-lg border p-4 text-sm text-muted-foreground">
@@ -587,7 +712,7 @@ export function PublicacionForm({
                 </div>
               ) : images.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                  <ImageIcon className="size-4" /> Esta publicacion no tiene imagenes guardadas.
+                  <ImageIcon className="size-4" /> Sin imagenes guardadas. Arrastra archivos o una imagen desde el navegador.
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -618,7 +743,7 @@ export function PublicacionForm({
             {!editing && (
               pendingPreviews.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-                  <ImageIcon className="size-4" /> Todavia no elegiste imagenes.
+                  <ImageIcon className="size-4" /> Todavia no elegiste imagenes. Arrastra archivos o una imagen desde el navegador.
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
