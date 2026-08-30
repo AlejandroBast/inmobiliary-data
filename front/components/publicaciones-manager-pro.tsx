@@ -973,6 +973,7 @@ export function PublicacionesManagerPro({
           fuentes={fuentes}
           barrios={barrios}
           tiposInmueble={tiposInmueble}
+          phNombres={phNombres}
           open={formOpen}
           onOpenChange={setFormOpen}
           editing={editing}
