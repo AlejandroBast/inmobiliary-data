@@ -295,6 +295,7 @@ export function PublicacionesManager({
           fuentes={fuentes}
           barrios={[]}
           tiposInmueble={[]}
+          phNombres={[]}
           open={formOpen}
           onOpenChange={setFormOpen}
           editing={editing}
