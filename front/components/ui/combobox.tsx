@@ -4,7 +4,7 @@ import * as React from "react"
 import { Combobox as ComboboxPrimitive } from "@base-ui/react/combobox"
 
 import { cn } from "@/lib/utils"
-import { ChevronDownIcon, PlusIcon } from "lucide-react"
+import { ChevronDownIcon, PlusIcon, XIcon } from "lucide-react"
 
 const Combobox = ComboboxPrimitive.Root
 
@@ -99,7 +99,7 @@ function ComboboxItem({
       data-slot="combobox-item"
       data-variant={variant}
       className={cn(
-        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1.5 px-2 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 data-[variant=create]:text-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "relative flex w-full cursor-default items-center gap-1.5 rounded-md py-1.5 px-2 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-selected:bg-accent/60 data-selected:font-medium data-disabled:pointer-events-none data-disabled:opacity-50 data-[variant=create]:text-primary [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
         className
       )}
       {...props}
@@ -107,6 +107,46 @@ function ComboboxItem({
       {variant === "create" && <PlusIcon />}
       {children}
     </ComboboxPrimitive.Item>
+  )
+}
+
+function ComboboxChips({ className, ...props }: ComboboxPrimitive.Chips.Props) {
+  return (
+    <ComboboxPrimitive.Chips
+      data-slot="combobox-chips"
+      className={cn("flex flex-1 flex-wrap items-center gap-1", className)}
+      {...props}
+    />
+  )
+}
+
+function ComboboxChip({ className, children, ...props }: ComboboxPrimitive.Chip.Props) {
+  return (
+    <ComboboxPrimitive.Chip
+      data-slot="combobox-chip"
+      className={cn(
+        "flex items-center gap-1 rounded-md bg-accent px-1.5 py-0.5 text-xs text-accent-foreground data-highlighted:ring-2 data-highlighted:ring-ring",
+        className
+      )}
+      {...props}
+    >
+      {children}
+    </ComboboxPrimitive.Chip>
+  )
+}
+
+function ComboboxChipRemove({ className, ...props }: ComboboxPrimitive.ChipRemove.Props) {
+  return (
+    <ComboboxPrimitive.ChipRemove
+      data-slot="combobox-chip-remove"
+      className={cn(
+        "rounded-sm text-accent-foreground/70 outline-hidden hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:pointer-events-none [&_svg]:size-3",
+        className
+      )}
+      {...props}
+    >
+      <XIcon />
+    </ComboboxPrimitive.ChipRemove>
   )
 }
 
@@ -142,6 +182,9 @@ function withCreateOption<T extends { value: string; label: string }>(
 
 export {
   Combobox,
+  ComboboxChip,
+  ComboboxChipRemove,
+  ComboboxChips,
   ComboboxContent,
   ComboboxEmpty,
   ComboboxInput,
