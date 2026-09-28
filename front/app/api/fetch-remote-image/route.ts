@@ -7,6 +7,9 @@ const FETCH_TIMEOUT_MS = 15000
 const CONTENT_TYPE_EXT: Record<string, string> = {
   "image/png": "png",
   "image/jpeg": "jpg",
+  // Metrocuadrado responde con este content-type no estandar.
+  "image/jpg": "jpg",
+  "image/pjpeg": "jpg",
   "image/webp": "webp",
   "image/gif": "gif",
 }
