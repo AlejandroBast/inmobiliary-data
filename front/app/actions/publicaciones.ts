@@ -92,23 +92,31 @@ export type CoincidenciaPublicacion = {
 export type ComparacionPublicacion = {
   id: number
   coincidenciaId: number | null
+  fuenteId: number | null
   fuenteNombre: string | null
   linkOrigen: string
+  linksAdicionales: unknown
   codigoExterno: string | null
   tipoInmueble: string | null
   ciudad: string | null
   barrio: string | null
   direccion: string | null
+  coordenadas: string | null
+  latitud: string | null
+  longitud: string | null
   ph: string | null
   precio: string
   m2: string | null
   m2Construido: string | null
+  antiguedad: string | null
+  pisos: number | null
   habitaciones: number | null
   banios: number | null
   parqueadero: number | null
   estrato: number | null
   administracion: string | null
   descripcion: string | null
+  notas: string | null
   puntaje: number | null
   estado: "pendiente" | "confirmada" | null
   imagenesCoincidentes: number
@@ -594,10 +602,12 @@ export async function getComparacionPublicaciones(publicacionId: number): Promis
   const placeholders = ids.map(() => "?").join(", ")
   const [rows] = await pool.query<RowDataPacket[]>(
     `SELECT
-       p.id, p.link_origen, p.codigo_externo, p.tipo_inmueble, p.ciudad,
-       p.barrio, p.direccion, p.ph, p.precio, p.m2, p.m2_construido,
-       p.habitaciones, p.banios, p.parqueadero, p.estrato,
-       p.administracion, p.descripcion, f.nombre AS fuente_nombre
+      p.id, p.fuente_id, p.link_origen, p.links_adicionales, p.codigo_externo,
+      p.tipo_inmueble, p.ciudad, p.barrio, p.direccion, p.coordenadas,
+      p.latitud, p.longitud, p.ph, p.precio, p.m2, p.m2_construido,
+      p.antiguedad, p.pisos, p.habitaciones, p.banios, p.parqueadero,
+      p.estrato, p.administracion, p.descripcion, p.notas,
+      f.nombre AS fuente_nombre
      FROM publicaciones p
      LEFT JOIN fuentes_inmobiliarias f ON f.id = p.fuente_id
      WHERE p.id IN (${placeholders})`,
@@ -619,23 +629,31 @@ export async function getComparacionPublicaciones(publicacionId: number): Promis
       return {
         id,
         coincidenciaId: match == null ? null : Number(match.id),
+        fuenteId: row.fuente_id == null ? null : Number(row.fuente_id),
         fuenteNombre: row.fuente_nombre == null ? null : String(row.fuente_nombre),
         linkOrigen: String(row.link_origen),
+        linksAdicionales: row.links_adicionales ?? null,
         codigoExterno: row.codigo_externo == null ? null : String(row.codigo_externo),
         tipoInmueble: row.tipo_inmueble == null ? null : String(row.tipo_inmueble),
         ciudad: row.ciudad == null ? null : String(row.ciudad),
         barrio: row.barrio == null ? null : String(row.barrio),
         direccion: row.direccion == null ? null : String(row.direccion),
+        coordenadas: row.coordenadas == null ? null : String(row.coordenadas),
+        latitud: row.latitud == null ? null : String(row.latitud),
+        longitud: row.longitud == null ? null : String(row.longitud),
         ph: row.ph == null ? null : String(row.ph),
         precio: String(row.precio),
         m2: row.m2 == null ? null : String(row.m2),
         m2Construido: row.m2_construido == null ? null : String(row.m2_construido),
+        antiguedad: row.antiguedad == null ? null : String(row.antiguedad),
+        pisos: row.pisos == null ? null : Number(row.pisos),
         habitaciones: row.habitaciones == null ? null : Number(row.habitaciones),
         banios: row.banios == null ? null : Number(row.banios),
         parqueadero: row.parqueadero == null ? null : Number(row.parqueadero),
         estrato: row.estrato == null ? null : Number(row.estrato),
         administracion: row.administracion == null ? null : String(row.administracion),
         descripcion: row.descripcion == null ? null : String(row.descripcion),
+        notas: row.notas == null ? null : String(row.notas),
         puntaje: match == null ? null : Number(match.puntaje),
         estado: match == null ? null : match.estado as "pendiente" | "confirmada",
         imagenesCoincidentes: match == null ? 0 : Number(match.imagenes_coincidentes ?? 0),
