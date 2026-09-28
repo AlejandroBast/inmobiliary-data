@@ -216,6 +216,35 @@ function shortNote(value?: string | null) {
   return clean.length > 72 ? `${clean.slice(0, 72)}...` : clean
 }
 
+const COMPARISON_INFORMATION_FIELDS = [
+  "fuenteNombre",
+  "linkOrigen",
+  "codigoExterno",
+  "tipoInmueble",
+  "ciudad",
+  "barrio",
+  "direccion",
+  "ph",
+  "precio",
+  "m2",
+  "m2Construido",
+  "habitaciones",
+  "banios",
+  "parqueadero",
+  "estrato",
+  "administracion",
+  "descripcion",
+] as const
+
+function comparisonCompleteness(publicacion: ComparacionPublicacion) {
+  const completedFields = COMPARISON_INFORMATION_FIELDS.filter((field) => {
+    const value = publicacion[field]
+    return value !== null && value !== undefined && String(value).trim() !== ""
+  }).length
+
+  return Math.round((completedFields / COMPARISON_INFORMATION_FIELDS.length) * 100)
+}
+
 function coordinatesText(publicacion: Row) {
   const coordenadas = String(publicacion.coordenadas ?? "").trim()
   if (coordenadas) return coordenadas
@@ -491,6 +520,14 @@ export function PublicacionesManagerPro({
   function openEdit(row: Row) {
     setEditing(row)
     setFormOpen(true)
+  }
+
+  function openComparisonEdit(item: ComparacionPublicacion) {
+    setComparisonRootId(null)
+    openEdit({
+      ...item,
+      ...(publicaciones.find((publication) => publication.id === item.id) ?? {}),
+    })
   }
 
   async function openComparison(row: Row) {
@@ -1298,6 +1335,8 @@ export function PublicacionesManagerPro({
               {comparisonRows.map((item) => {
                 const images = comparisonImages[item.id] ?? []
                 const isRoot = item.id === comparisonRootId
+                const completeness = comparisonCompleteness(item)
+                const mostComplete = completeness === Math.max(...comparisonRows.map(comparisonCompleteness))
                 return (
                   <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm transition-shadow ${isRoot ? "border-primary ring-2 ring-primary/15" : "border-border/70 hover:shadow-md"}`}>
                     <ComparisonImageCarousel publicationId={item.id} images={images}>
@@ -1310,10 +1349,17 @@ export function PublicacionesManagerPro({
                       <div>
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <h3 className="font-semibold">{item.tipoInmueble || "Inmueble"}</h3>
-                          <Badge variant="secondary">{item.fuenteNombre || "Sin fuente"}</Badge>
+                          <div className="flex flex-wrap justify-end gap-1.5">
+                            {mostComplete && <Badge className="tone-primary">Más completa</Badge>}
+                            <Badge variant="secondary">{item.fuenteNombre || "Sin fuente"}</Badge>
+                          </div>
                         </div>
                         <p className="mt-2 text-xl font-bold text-primary">{formatCOP(item.precio)}</p>
                         {item.puntaje !== null && <p className="mt-1 text-xs text-muted-foreground">{item.puntaje}% de coincidencia · {item.imagenesCoincidentes} imagen(es) idéntica(s)</p>}
+                        <div className="mt-3 flex items-center justify-between gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                          <span className="text-xs text-muted-foreground">Información disponible</span>
+                          <span className="text-sm font-semibold text-primary">{completeness}%</span>
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs">
                         <CompareValue label="Barrio" value={item.barrio || "-"} />
@@ -1327,7 +1373,24 @@ export function PublicacionesManagerPro({
                         <CompareValue label="PH" value={item.ph || "-"} className="col-span-2" />
                         <CompareValue label="Dirección" value={item.direccion || "-"} className="col-span-2" />
                       </div>
-                      {item.descripcion && <p className="line-clamp-3 text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>}
+                      {item.descripcion ? (
+                        <details className="rounded-md border bg-muted/20 p-3" open>
+                          <summary className="cursor-pointer text-xs font-medium text-foreground">Descripción completa</summary>
+                          <p className="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">{item.descripcion}</p>
+                        </details>
+                      ) : (
+                        <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">Sin descripción</p>
+                      )}
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full gap-2"
+                        onClick={() => openComparisonEdit(item)}
+                      >
+                        <Pencil className="size-4" />
+                        Editar publicación
+                      </Button>
 
                       <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
                         <div className="flex items-center gap-2">
