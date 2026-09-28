@@ -2237,7 +2237,7 @@ def extract_image_urls(page, listing_url=None):
             continue
         seen.add(src)
         image_urls.append(src)
-        if len(image_urls) >= MAX_IMAGES_PER_LISTING:
+        if MAX_IMAGES_PER_LISTING > 0 and len(image_urls) >= MAX_IMAGES_PER_LISTING:
             break
     return image_urls
 
