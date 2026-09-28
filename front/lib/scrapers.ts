@@ -8,11 +8,11 @@ import path from "node:path"
 // y se ejecutan con "python -m", no por ruta de archivo. Se guarda tambien la
 // ruta del archivo solo para verificar que exista antes de lanzar el proceso.
 export const SCRAPER_SOURCES = {
-  fincaraiz: { name: "Finca Raiz", module: "inmobiliary.scrapers.fincaraiz", file: "src/inmobiliary/scrapers/fincaraiz.py", estimatedSeconds: 600 },
-  ciencuadras: { name: "Ciencuadras", module: "inmobiliary.scrapers.ciencuadras", file: "src/inmobiliary/scrapers/ciencuadras.py", estimatedSeconds: 600 },
-  metrocuadrado: { name: "Metrocuadrado", module: "inmobiliary.scrapers.metrocuadrado", file: "src/inmobiliary/scrapers/metrocuadrado.py", estimatedSeconds: 720 },
-  amorel: { name: "Amorel", module: "inmobiliary.scrapers.amorel", file: "src/inmobiliary/scrapers/amorel.py", estimatedSeconds: 900 },
-  facebook: { name: "Facebook Marketplace", module: "inmobiliary.scrapers.facebook", file: "src/inmobiliary/scrapers/facebook.py", estimatedSeconds: 600 },
+  fincaraiz: { name: "Finca Raiz", module: "inmobiliary.scrapers.fincaraiz", file: "src/inmobiliary/scrapers/fincaraiz.py", hostnames: ["fincaraiz.com.co"], estimatedSeconds: 600 },
+  ciencuadras: { name: "Ciencuadras", module: "inmobiliary.scrapers.ciencuadras", file: "src/inmobiliary/scrapers/ciencuadras.py", hostnames: ["ciencuadras.com"], estimatedSeconds: 600 },
+  metrocuadrado: { name: "Metrocuadrado", module: "inmobiliary.scrapers.metrocuadrado", file: "src/inmobiliary/scrapers/metrocuadrado.py", hostnames: ["metrocuadrado.com"], estimatedSeconds: 720 },
+  amorel: { name: "Amorel", module: "inmobiliary.scrapers.amorel", file: "src/inmobiliary/scrapers/amorel.py", hostnames: ["amorelpasto.com"], estimatedSeconds: 900 },
+  facebook: { name: "Facebook Marketplace", module: "inmobiliary.scrapers.facebook", file: "src/inmobiliary/scrapers/facebook.py", hostnames: ["facebook.com"], estimatedSeconds: 600 },
 } as const
 
 export type ScraperSourceId = keyof typeof SCRAPER_SOURCES
