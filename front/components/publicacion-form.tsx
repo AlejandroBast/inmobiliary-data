@@ -35,10 +35,11 @@ import { toast } from "sonner"
 import { createPublicacion, setManualLinkStatus, updatePublicacion, type PublicacionInput } from "@/app/actions/publicaciones"
 import type { Fuente } from "@/lib/db/schema"
 import { NuevaFuenteDialog } from "./nueva-fuente-dialog"
-import { ImageIcon, Loader2, Upload, X } from "lucide-react"
+import { ImageIcon, Link2, Loader2, Upload, X } from "lucide-react"
 
 type Row = Record<string, unknown> & { id: number }
 type ImageItem = { name: string; src: string }
+type ImportedDraft = { data: Record<string, unknown>; imageUrls: string[]; sourceName: string }
 
 export function PublicacionForm({
   fuentes,
@@ -57,8 +58,15 @@ export function PublicacionForm({
   onOpenChange: (open: boolean) => void
   editing?: Row | null
 }) {
+  const [importedDraft, setImportedDraft] = useState<ImportedDraft | null>(null)
+  const [importDialogOpen, setImportDialogOpen] = useState(false)
+  const [importUrl, setImportUrl] = useState("")
+  const [importLoading, setImportLoading] = useState(false)
+  const [importedImageUrls, setImportedImageUrls] = useState<string[]>([])
+  const [formVersion, setFormVersion] = useState(0)
+
   const val = (key: string) => {
-    const v = editing?.[key]
+    const v = editing?.[key] ?? importedDraft?.data[key]
     return v === null || v === undefined ? "" : String(v)
   }
 
@@ -93,15 +101,46 @@ export function PublicacionForm({
   const dragCounterRef = useRef(0)
 
   useEffect(() => {
-    setFuenteId(editing ? String(editing.fuenteId) : "")
-    setBarrio(editing ? val("barrio") : "")
-    setPh(editing ? val("ph") : "")
-    setTipoInmueble(editing ? val("tipoInmueble") : "")
+    setFuenteId(editing ? String(editing.fuenteId) : importedDraft?.data.fuenteId ? String(importedDraft.data.fuenteId) : "")
+    setBarrio(editing ? val("barrio") : String(importedDraft?.data.barrio ?? ""))
+    setPh(editing ? val("ph") : String(importedDraft?.data.ph ?? ""))
+    setTipoInmueble(editing ? val("tipoInmueble") : String(importedDraft?.data.tipoInmueble ?? ""))
     const raw = editing?.linksAdicionales
     const manual = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check_manual : null
     const manualOk = manual && typeof manual === "object" ? (manual as Record<string, unknown>).ok : null
     setManualUnavailable(manualOk === false)
-  }, [editing])
+  }, [editing, importedDraft])
+
+  async function importPublication() {
+    const url = importUrl.trim()
+    if (!url || importLoading) return
+
+    setImportLoading(true)
+    try {
+      const response = await fetch("/api/publicaciones/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      })
+      const result = await response.json() as { error?: string; data?: Record<string, unknown>; imageUrls?: string[]; sourceName?: string }
+      if (!response.ok || !result.data || !result.sourceName) {
+        toast.error(result.error || "No se pudo importar la publicación.")
+        return
+      }
+
+      const imageUrls = Array.isArray(result.imageUrls) ? result.imageUrls.filter((item): item is string => typeof item === "string") : []
+      setImportedDraft({ data: result.data, imageUrls, sourceName: result.sourceName })
+      setImportedImageUrls(imageUrls)
+      setPendingFiles([])
+      setFormVersion((current) => current + 1)
+      setImportDialogOpen(false)
+      toast.success("Datos importados", { description: `Revisa y ajusta la publicación de ${result.sourceName} antes de guardarla.` })
+    } catch {
+      toast.error("No se pudo importar la publicación.")
+    } finally {
+      setImportLoading(false)
+    }
+  }
 
   // Marca/quita el link como no disponible al toque, sin esperar a "Guardar
   // cambios": ese submit reemplaza toda la columna links_adicionales (ver
@@ -170,6 +209,32 @@ export function PublicacionForm({
     files.forEach((file) => formData.append("files", file))
     const response = await fetch(`/api/publicaciones/${publicacionId}/imagenes`, { method: "POST", body: formData })
     return response.json() as Promise<{ success: boolean; error?: string; images?: ImageItem[]; skipped?: string[] }>
+  }
+
+  async function uploadImportedImages(publicacionId: number) {
+    let saved = 0
+    for (const [index, url] of importedImageUrls.entries()) {
+      try {
+        const response = await fetch("/api/fetch-remote-image", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url }),
+        })
+        if (!response.ok) continue
+        const blob = await response.blob()
+        const extension = (blob.type.split("/")[1] || "jpg").replace("jpeg", "jpg")
+        const result = await uploadImages(publicacionId, [new File([blob], `importada_${index + 1}.${extension}`, { type: blob.type })])
+        if (result.success) saved += 1
+      } catch {
+        // Una imagen caída no debe impedir guardar los demás datos.
+      }
+    }
+    const total = importedImageUrls.length
+    if (saved === total) {
+      toast.success(`${saved} imagen${saved === 1 ? "" : "es"} importada${saved === 1 ? "" : "s"}.`)
+    } else {
+      toast.warning(`Se importaron ${saved} de ${total} imágenes; las demás no se pudieron descargar.`)
+    }
   }
 
   async function addFiles(files: File[]) {
@@ -402,12 +467,16 @@ export function PublicacionForm({
           toast.error(uploadResult.error || "La publicación se creó, pero no se pudieron subir las imágenes.")
         }
       }
+      if (res.id && importedImageUrls.length > 0) {
+        await uploadImportedImages(res.id)
+      }
       onOpenChange(false)
     })
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>{editing ? "Editar publicación" : "Nueva publicación"}</DialogTitle>
@@ -416,7 +485,7 @@ export function PublicacionForm({
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-6" id="publicacion-form">
+        <form key={formVersion} onSubmit={handleSubmit} className="space-y-6" id="publicacion-form">
           {/* Origen */}
           <fieldset className="space-y-4">
             <legend className="text-sm font-medium text-muted-foreground">Origen</legend>
@@ -456,9 +525,20 @@ export function PublicacionForm({
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="linkOrigen">Link de origen</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="linkOrigen">Link de origen</Label>
+                {!editing && (
+                  <Button type="button" variant="outline" size="sm" className="gap-1.5" onClick={() => setImportDialogOpen(true)}>
+                    <Link2 className="size-4" />
+                    Insertar link
+                  </Button>
+                )}
+              </div>
               <Input id="linkOrigen" name="linkOrigen" type="url" defaultValue={val("linkOrigen")} placeholder="https://... (opcional)" />
             </div>
+            {importedDraft && !editing && (
+              <p className="text-xs text-muted-foreground">Datos importados desde {importedDraft.sourceName}. Puedes modificar cualquier campo antes de guardar.</p>
+            )}
             {editing && (
               <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
                 <div className="space-y-0.5">
@@ -741,11 +821,37 @@ export function PublicacionForm({
             )}
 
             {!editing && (
-              pendingPreviews.length === 0 ? (
+              importedImageUrls.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-muted-foreground">Imágenes encontradas por el scraper</p>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {importedImageUrls.map((url, index) => (
+                      <div key={url} className="group relative overflow-hidden rounded-lg border bg-muted">
+                        <img src={url} alt={`Imagen importada ${index + 1}`} className="aspect-[4/3] w-full object-cover transition group-hover:brightness-75" loading="lazy" />
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="icon"
+                          className="absolute right-2 top-2 size-9 rounded-full border-2 border-white bg-destructive text-white opacity-0 shadow-lg transition hover:bg-destructive/90 group-hover:opacity-100 focus-visible:opacity-100"
+                          aria-label={`Quitar imagen importada ${index + 1}`}
+                          title="Quitar imagen importada"
+                          onClick={() => setImportedImageUrls((current) => current.filter((item) => item !== url))}
+                        >
+                          <X className="size-5 stroke-[3]" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            )}
+
+            {!editing && (
+              pendingPreviews.length === 0 && importedImageUrls.length === 0 ? (
                 <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
                   <ImageIcon className="size-4" /> Todavia no elegiste imagenes. Arrastra archivos o una imagen desde el navegador.
                 </div>
-              ) : (
+              ) : pendingPreviews.length > 0 ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                   {pendingPreviews.map(({ file, url }) => (
                     <div key={url} className="group relative overflow-hidden rounded-lg border bg-muted">
@@ -767,7 +873,7 @@ export function PublicacionForm({
                     </div>
                   ))}
                 </div>
-              )
+              ) : null
             )}
           </fieldset>
         </form>
@@ -781,6 +887,39 @@ export function PublicacionForm({
           </Button>
         </DialogFooter>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+
+      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Insertar link de publicación</DialogTitle>
+          <DialogDescription>
+            Pega el enlace de una publicación de Amorel, Ciencuadras, Finca Raiz, Metrocuadrado o Facebook Marketplace.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="import-publication-url">URL de la publicación</Label>
+          <Input
+            id="import-publication-url"
+            type="url"
+            value={importUrl}
+            onChange={(event) => setImportUrl(event.target.value)}
+            placeholder="https://..."
+            disabled={importLoading}
+          />
+          <p className="text-xs text-muted-foreground">La URL se valida antes de ejecutar el scraper correspondiente.</p>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => setImportDialogOpen(false)} disabled={importLoading}>
+            Cancelar
+          </Button>
+          <Button type="button" onClick={() => void importPublication()} disabled={importLoading || !importUrl.trim()} className="gap-2">
+            {importLoading ? <Loader2 className="size-4 animate-spin" /> : <Link2 className="size-4" />}
+            {importLoading ? "Consultando scraper..." : "Cargar publicación"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+      </Dialog>
+    </>
   )
 }
