@@ -41,6 +41,10 @@ type Row = Record<string, unknown> & { id: number }
 type ImageItem = { name: string; src: string }
 type ImportedDraft = { data: Record<string, unknown>; imageUrls: string[]; sourceName: string }
 
+// Opcion del selector de PH para escribir a mano la denominacion que trae el
+// anuncio cuando no esta en el catalogo (ph_conjuntos). Se guarda solo el texto.
+const PH_OTRO = "Otro"
+
 export function PublicacionForm({
   fuentes,
   barrios,
@@ -84,7 +88,23 @@ export function PublicacionForm({
   }, [fuenteList])
   const [fuenteId, setFuenteId] = useState<string>(editing ? String(editing.fuenteId) : "")
   const [barrio, setBarrio] = useState<string>(editing ? val("barrio") : "")
-  const [ph, setPh] = useState<string>(editing ? val("ph") : "")
+  // Un PH guardado que no esta en el catalogo se muestra como "Otro" + texto.
+  const phCatalogo = useMemo(() => new Set(phNombres.map((item) => item.value)), [phNombres])
+  const splitPh = (value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) return { seleccion: "", otro: "" }
+    return phCatalogo.has(trimmed) ? { seleccion: trimmed, otro: "" } : { seleccion: PH_OTRO, otro: trimmed }
+  }
+  const initialPh = splitPh(editing ? val("ph") : "")
+  const [ph, setPh] = useState<string>(initialPh.seleccion)
+  const [phQuery, setPhQuery] = useState<string>(initialPh.seleccion)
+  const [phOtro, setPhOtro] = useState<string>(initialPh.otro)
+  const phItems = useMemo(() => {
+    const items = [...phNombres, { value: PH_OTRO, label: PH_OTRO }]
+    const query = phQuery.trim().toLowerCase()
+    if (!query || phQuery === ph) return items
+    return items.filter((item) => item.value === PH_OTRO || item.label.toLowerCase().includes(query))
+  }, [phNombres, phQuery, ph])
   const [tipoInmueble, setTipoInmueble] = useState<string>(editing ? val("tipoInmueble") : "")
   const [images, setImages] = useState<ImageItem[]>([])
   const [imagesLoading, setImagesLoading] = useState(false)
@@ -103,7 +123,10 @@ export function PublicacionForm({
   useEffect(() => {
     setFuenteId(editing ? String(editing.fuenteId) : importedDraft?.data.fuenteId ? String(importedDraft.data.fuenteId) : "")
     setBarrio(editing ? val("barrio") : String(importedDraft?.data.barrio ?? ""))
-    setPh(editing ? val("ph") : String(importedDraft?.data.ph ?? ""))
+    const nextPh = splitPh(editing ? val("ph") : String(importedDraft?.data.ph ?? ""))
+    setPh(nextPh.seleccion)
+    setPhQuery(nextPh.seleccion)
+    setPhOtro(nextPh.otro)
     setTipoInmueble(editing ? val("tipoInmueble") : String(importedDraft?.data.tipoInmueble ?? ""))
     const raw = editing?.linksAdicionales
     const manual = raw && typeof raw === "object" ? (raw as Record<string, unknown>).link_check_manual : null
@@ -413,7 +436,7 @@ export function PublicacionForm({
       ciudad: str("ciudad"),
       barrio: barrio.trim() || null,
       tipoInmueble: tipoInmueble || null,
-      ph: ph.trim() || null,
+      ph: (ph === PH_OTRO ? phOtro : ph).trim() || null,
       estrato: num("estrato"),
       descripcion: str("descripcion"),
       precio: num("precio"),
@@ -648,24 +671,37 @@ export function PublicacionForm({
               <div className="space-y-2">
                 <Label htmlFor="ph">PH</Label>
                 <Combobox
-                  items={withCreateOption(phNombres, ph)}
+                  items={[...phNombres, { value: PH_OTRO, label: PH_OTRO }]}
+                  filteredItems={phItems}
                   value={ph || null}
-                  onValueChange={(v) => setPh(v ?? "")}
-                  inputValue={ph}
-                  onInputValueChange={setPh}
+                  onValueChange={(v) => {
+                    setPh(v ?? "")
+                    setPhQuery(v ?? "")
+                  }}
+                  inputValue={phQuery}
+                  onInputValueChange={setPhQuery}
                 >
                   <ComboboxInputGroup>
-                    <ComboboxInput id="ph" placeholder="Selecciona o escribe un PH" />
+                    <ComboboxInput id="ph" placeholder="Selecciona un PH" />
                     <ComboboxTriggerIcon />
                   </ComboboxInputGroup>
                   <ComboboxContent emptyMessage="Sin coincidencias.">
-                    {(item: { value: string; label: string; __create?: true }) => (
-                      <ComboboxItem key={item.value} value={item.value} variant={item.__create ? "create" : "default"}>
-                        {item.__create ? `Crear "${item.label}"` : item.label}
+                    {(item: { value: string; label: string }) => (
+                      <ComboboxItem key={item.value} value={item.value}>
+                        {item.label}
                       </ComboboxItem>
                     )}
                   </ComboboxContent>
                 </Combobox>
+                {ph === PH_OTRO && (
+                  <Input
+                    id="phOtro"
+                    aria-label="Otro PH"
+                    value={phOtro}
+                    onChange={(e) => setPhOtro(e.target.value)}
+                    placeholder="Escribe el PH como aparece en el anuncio"
+                  />
+                )}
               </div>
               <div className="space-y-2">
                 <Label htmlFor="estrato">Estrato</Label>

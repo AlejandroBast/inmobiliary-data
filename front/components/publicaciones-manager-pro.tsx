@@ -40,6 +40,7 @@ import {
   type PublicacionLinkStatus,
 } from "@/app/actions/publicaciones"
 import { ExpandableText } from "@/components/expandable-text"
+import { ImageLightbox } from "@/components/image-lightbox"
 import { PublicacionForm } from "@/components/publicacion-form"
 import { PublicacionesColumnFilters } from "@/components/publicaciones-column-filters"
 import { formatCOP, formatDate, formatNumber } from "@/lib/format"
@@ -108,6 +109,7 @@ function ComparisonImageCarousel({
   children?: React.ReactNode
 }) {
   const [imageIndex, setImageIndex] = useState(0)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
   const preloadedImages = useRef<Map<string, HTMLImageElement>>(new Map())
   const imageCount = images.length
   const safeImageIndex = imageCount > 0 ? imageIndex % imageCount : 0
@@ -115,6 +117,7 @@ function ComparisonImageCarousel({
 
   useEffect(() => {
     setImageIndex(0)
+    setLightboxOpen(false)
     preloadedImages.current.clear()
   }, [publicationId, images])
 
@@ -151,15 +154,22 @@ function ComparisonImageCarousel({
   return (
     <div className="relative aspect-[16/10] overflow-hidden bg-muted">
       {image ? (
-        <img
-          src={thumbSrc(image.src, CAROUSEL_THUMB_WIDTH)}
-          alt={`Publicacion ${publicationId}`}
-          className="size-full select-none object-cover"
-          decoding="async"
-          loading="eager"
-          fetchPriority="high"
-          draggable={false}
-        />
+        <button
+          type="button"
+          aria-label={`Ampliar foto de la publicacion ${publicationId}`}
+          className="block size-full cursor-zoom-in"
+          onClick={() => setLightboxOpen(true)}
+        >
+          <img
+            src={thumbSrc(image.src, CAROUSEL_THUMB_WIDTH)}
+            alt={`Publicacion ${publicationId}`}
+            className="size-full select-none object-cover"
+            decoding="async"
+            loading="eager"
+            fetchPriority="high"
+            draggable={false}
+          />
+        </button>
       ) : (
         <div className="flex size-full flex-col items-center justify-center gap-2 text-muted-foreground">
           <ImageIcon className="size-8" />
@@ -196,6 +206,14 @@ function ComparisonImageCarousel({
           </span>
         </>
       )}
+
+      <ImageLightbox
+        images={images}
+        index={lightboxOpen ? safeImageIndex : null}
+        onIndexChange={setImageIndex}
+        onClose={() => setLightboxOpen(false)}
+        title={`Publicación #${publicationId}`}
+      />
     </div>
   )
 }
@@ -225,7 +243,6 @@ const COMPARISON_INFORMATION_FIELDS = [
   "barrio",
   "direccion",
   "ph",
-  "precio",
   "m2",
   "m2Construido",
   "habitaciones",
@@ -236,13 +253,25 @@ const COMPARISON_INFORMATION_FIELDS = [
   "descripcion",
 ] as const
 
-function comparisonCompleteness(publicacion: ComparacionPublicacion) {
-  const completedFields = COMPARISON_INFORMATION_FIELDS.filter((field) => {
-    const value = publicacion[field]
-    return value !== null && value !== undefined && String(value).trim() !== ""
-  }).length
+// Campos de la tabla + precio, ubicacion en mapa e imagenes, que no son un
+// simple "tiene valor": un precio en 0 no cuenta y la ubicacion vale con
+// coordenadas o con latitud/longitud.
+const COMPARISON_EXTRA_FIELDS = 3
 
-  return Math.round((completedFields / COMPARISON_INFORMATION_FIELDS.length) * 100)
+function comparisonCompleteness(publicacion: ComparacionPublicacion, imageCount: number) {
+  const hasValue = (value: unknown) => value !== null && value !== undefined && String(value).trim() !== ""
+  const precio = Number(publicacion.precio)
+  const hasLocation =
+    hasValue(publicacion.coordenadas) || (hasValue(publicacion.latitud) && hasValue(publicacion.longitud))
+
+  const filled =
+    COMPARISON_INFORMATION_FIELDS.filter((field) => hasValue(publicacion[field])).length +
+    (Number.isFinite(precio) && precio > 0 ? 1 : 0) +
+    (hasLocation ? 1 : 0) +
+    (imageCount > 0 ? 1 : 0)
+  const total = COMPARISON_INFORMATION_FIELDS.length + COMPARISON_EXTRA_FIELDS
+
+  return { filled, total, percent: Math.round((filled / total) * 100) }
 }
 
 function coordinatesText(publicacion: Row) {
@@ -355,6 +384,7 @@ export function PublicacionesManagerPro({
   const [editing, setEditing] = useState<Row | null>(null)
   const [detail, setDetail] = useState<Row | null>(null)
   const [detailImages, setDetailImages] = useState<ImageItem[]>([])
+  const [detailLightboxIndex, setDetailLightboxIndex] = useState<number | null>(null)
   const [detailHtmlFiles, setDetailHtmlFiles] = useState<HtmlItem[]>([])
   const [linkStatuses, setLinkStatuses] = useState<Record<number, PublicacionLinkStatus>>({})
   const [linksLoading, setLinksLoading] = useState(false)
@@ -452,6 +482,7 @@ export function PublicacionesManagerPro({
   }, [publicaciones, safePage, pageSize])
 
   useEffect(() => {
+    setDetailLightboxIndex(null)
     if (!detail) {
       setDetailImages([])
       setDetailHtmlFiles([])
@@ -1173,9 +1204,14 @@ export function PublicacionesManagerPro({
                   <p className="text-sm text-muted-foreground">Cargando imagenes...</p>
                 ) : detailImages.length ? (
                   <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {detailImages.map((image) => (
+                    {detailImages.map((image, index) => (
                       <div key={image.src} className="group relative overflow-hidden rounded-lg border bg-muted">
-                        <a href={image.src} target="_blank" rel="noopener noreferrer" className="block">
+                        <button
+                          type="button"
+                          aria-label={`Ampliar imagen ${index + 1}`}
+                          className="block w-full cursor-zoom-in"
+                          onClick={() => setDetailLightboxIndex(index)}
+                        >
                           <img
                             src={thumbSrc(image.src, DETAIL_THUMB_WIDTH)}
                             alt={`Imagen de publicacion ${detail.id}`}
@@ -1183,7 +1219,7 @@ export function PublicacionesManagerPro({
                             loading="lazy"
                             decoding="async"
                           />
-                        </a>
+                        </button>
                         <Button
                           type="button"
                           variant="destructive"
@@ -1300,6 +1336,13 @@ export function PublicacionesManagerPro({
                   Editar
                 </Button>
               </DialogFooter>
+              <ImageLightbox
+                images={detailImages}
+                index={detailLightboxIndex}
+                onIndexChange={setDetailLightboxIndex}
+                onClose={() => setDetailLightboxIndex(null)}
+                title={`Publicación #${detail.id}`}
+              />
             </>
           )}
         </DialogContent>
@@ -1330,13 +1373,20 @@ export function PublicacionesManagerPro({
               <Loader2 className="size-5 animate-spin" />
               Cargando publicaciones e imágenes...
             </div>
-          ) : comparisonRows.length > 1 ? (
+          ) : comparisonRows.length > 1 ? (() => {
+            const completenessById = Object.fromEntries(
+              comparisonRows.map((item) => [item.id, comparisonCompleteness(item, comparisonImages[item.id]?.length ?? 0)]),
+            )
+            const percents = Object.values(completenessById).map((value) => value.percent)
+            const maxCompleteness = Math.max(...percents)
+            const allTied = percents.every((value) => value === maxCompleteness)
+            return (
             <div className="grid items-stretch gap-4 md:grid-cols-2 xl:grid-cols-3">
               {comparisonRows.map((item) => {
                 const images = comparisonImages[item.id] ?? []
                 const isRoot = item.id === comparisonRootId
-                const completeness = comparisonCompleteness(item)
-                const mostComplete = completeness === Math.max(...comparisonRows.map(comparisonCompleteness))
+                const completeness = completenessById[item.id]
+                const mostComplete = !allTied && completeness.percent === maxCompleteness
                 return (
                   <article key={item.id} className={`overflow-hidden rounded-xl border bg-background shadow-sm transition-shadow ${isRoot ? "border-primary ring-2 ring-primary/15" : "border-border/70 hover:shadow-md"}`}>
                     <ComparisonImageCarousel publicationId={item.id} images={images}>
@@ -1356,9 +1406,14 @@ export function PublicacionesManagerPro({
                         </div>
                         <p className="mt-2 text-xl font-bold text-primary">{formatCOP(item.precio)}</p>
                         {item.puntaje !== null && <p className="mt-1 text-xs text-muted-foreground">{item.puntaje}% de coincidencia · {item.imagenesCoincidentes} imagen(es) idéntica(s)</p>}
-                        <div className="mt-3 flex items-center justify-between gap-2 rounded-md border bg-muted/40 px-3 py-2">
-                          <span className="text-xs text-muted-foreground">Información disponible</span>
-                          <span className="text-sm font-semibold text-primary">{completeness}%</span>
+                        <div className="mt-3 space-y-1.5 rounded-md border bg-muted/40 px-3 py-2" title={`${completeness.filled} de ${completeness.total} campos con información`}>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-xs text-muted-foreground">Completitud · {completeness.filled}/{completeness.total} campos</span>
+                            <span className="text-sm font-semibold text-primary">{completeness.percent}%</span>
+                          </div>
+                          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${completeness.percent}%` }} />
+                          </div>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -1501,7 +1556,8 @@ export function PublicacionesManagerPro({
                 )
               })}
             </div>
-          ) : (
+            )
+          })() : (
             <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
               No se encontraron publicaciones relacionadas para comparar.
             </div>
